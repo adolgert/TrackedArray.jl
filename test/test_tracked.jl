@@ -99,10 +99,7 @@ end
                 end
                 nothing
             end
-            @test length(writeres.changes) == length(written)
-            for elem in written
-                @test elem ∈ writeres.changes
-            end
+            @test issetequal(writeres.changes, written)
         elseif activity == 2
             empty!(read)
             chosen_keys = rand(rng, every_key, rand(rng, 0:length(every_key)))
@@ -113,10 +110,7 @@ end
                 end
                 nothing
             end
-            @test length(readres.reads) == length(read)
-            for elem in read
-                @test elem ∈ readres.reads
-            end
+            @test issetequal(readres.reads, read)
         end
     end
 end
