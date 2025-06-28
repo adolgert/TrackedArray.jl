@@ -12,9 +12,6 @@ import ..TrackedArray: PlaceType
 export TrackedVector, ConstructState
 export gotten, changed, reset_tracking!, reset_gotten!
 
-# Forward declaration - will be set to actual state type during construction
-const ObservedStateRef = Ref{Any}(nothing)
-
 """
     ObservedVector{T}
 
