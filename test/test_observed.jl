@@ -56,23 +56,23 @@ end
 
     logger = ConsoleLogger(stderr, Logging.Info)
     with_logger(logger) do
-        @info "Starting test loop with $(length(every_key)) available keys"
-        for step_idx in 1:5
+        @debug "Starting test loop with $(length(every_key)) available keys"
+        for step_idx in 1:50
             activity = rand(rng, 1:2)
             if activity == 1
                 n_keys = rand(rng, 0:length(every_key))
-                @info "Step $step_idx: Testing write operation with $n_keys keys"
+                @debug "Step $step_idx: Testing write operation with $n_keys keys"
                 result = write_n(physical_state, every_key, n_keys, rng)
-                @info "Step $step_idx: Write test result: $result"
+                @debug "Step $step_idx: Write test result: $result"
                 @test result
             elseif activity == 2
                 n_keys = rand(rng, 0:length(every_key))
-                @info "Step $step_idx: Testing read operation with $n_keys keys"
+                @debug "Step $step_idx: Testing read operation with $n_keys keys"
                 result = read_n(physical_state, every_key, n_keys, rng)
-                @info "Step $step_idx: Read test result: $result"
+                @debug "Step $step_idx: Read test result: $result"
                 @test result
             end
         end
-        @info "Completed test loop successfully"
+        @debug "Completed test loop successfully"
     end
 end

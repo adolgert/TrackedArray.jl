@@ -1,141 +1,38 @@
 """
-This module provides tools for tracking access to and changes of data structures.
-It includes a macro for creating structs that track access and a vector type that
-tracks changes to its elements.
-
-There are two approaches to tracking changes to elements of a vector.
-
- 1. Each element of the vector contains a pointer to the owning vector
-    and notifies it when there was a change.
-
- 2. The vector trackes which elements were read and, when asked what
-    changed, checkes each element that was read to see if it was also
-    modified.
-    
+This module implements a notification-based tracking system where:
+- Each element only stores a reference to its container and index
+- Elements notify their array when accessed/modified
+- Arrays notify the physical state
+- The physical state maintains centralized tracking
 """
 module Observed
 import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
-using MacroTools
+import ..TrackedArray: PlaceType
 
-export @tracked_struct, TrackedVector, ConstructState
+export TrackedVector, ConstructState
 export gotten, changed, reset_tracking!, reset_gotten!
 
-"""
-    @tracked_struct Name begin
-        field1::Type1
-        field2::Type2
-        # ...
-    end
-
-Creates a struct that tracks when its fields are accessed or modified.
-"""
-macro tracked_struct(typename, body)
-    @assert body.head == :block "Expected a block for struct body"
-    
-    fields = []
-    for expr in body.args
-        if expr isa LineNumberNode
-            continue
-        elseif expr isa Expr && expr.head == :(::)
-            push!(fields, expr)
-        end
-    end
-    
-    fieldnames = [field.args[1] for field in fields]
-    fieldtypes = [field.args[2] for field in fields]
-    
-    # Escape field definitions to evaluate in calling module context
-    escaped_fields = [Expr(:(::), esc(field.args[1]), esc(field.args[2])) for field in fields]
-    escaped_fieldnames = [esc(fname) for fname in fieldnames]
-    
-    # Create the internal struct
-    struct_def = quote
-        mutable struct $(esc(typename))
-            $(escaped_fields...)
-            _container::Union{Nothing, Any}
-            _index::Union{Nothing, Int}
-            _gotten::Set{Symbol}
-            _changed::Set{Symbol}
-            
-            function $(esc(typename))($(escaped_fieldnames...))
-                return new($(escaped_fieldnames...), nothing, nothing, Set{Symbol}(), Set{Symbol}())
-            end
-        end
-    end
-    
-    getprop_def = quote
-        function Base.getproperty(obj::$(esc(typename)), field::Symbol)
-            if field in (:_container, :_index, :_gotten, :_changed)
-                return getfield(obj, field)
-            else
-                push!(getfield(obj, :_gotten), field)
-                return getfield(obj, field)
-            end
-        end
-    end
-    
-    setprop_def = quote
-        function Base.setproperty!(obj::$(esc(typename)), field::Symbol, value)
-            if field in (:_container, :_index, :_gotten, :_changed)
-                setfield!(obj, field, value)
-            else
-                push!(getfield(obj, :_changed), field)
-                setfield!(obj, field, value)
-            end
-        end
-    end
-    
-    propnames_def = quote
-        function Base.propertynames(obj::$(esc(typename)), private::Bool=false)
-            if private
-                return fieldnames($(esc(typename)))
-            else
-                return $(fieldnames)
-            end
-        end
-    end
-    
-    # Define equality comparison properly  
-    field_comparisons = [:(getproperty(a, $(QuoteNode(fname))) == getproperty(b, $(QuoteNode(fname)))) for fname in fieldnames]
-    eq_expr = Expr(:&&, field_comparisons...)
-    
-    eq_def = quote
-        function Base.:(==)(a::$(esc(typename)), b::$(esc(typename)))
-            $eq_expr
-        end
-    end
-    
-    return quote
-        $(struct_def)
-        $(getprop_def)
-        $(setprop_def)
-        $(propnames_def)
-        $(eq_def)
-    end
-end
+# Forward declaration - will be set to actual state type during construction
+const ObservedStateRef = Ref{Any}(nothing)
 
 """
-    TrackedVector{T}
+    ObservedVector{T}
 
-A vector that tracks access and changes to its elements.
+A vector that tracks access and changes to its elements and notifies the physical state.
 """
-struct TrackedVector{T} <: AbstractVector{T}
+mutable struct ObservedVector{T} <: AbstractVector{T}
     data::Vector{T}
-    _accessed::Set{Int}
+    array_name::Symbol
+    physical_state::Any  # Will be set to the actual physical state
     
-    function TrackedVector{T}(::UndefInitializer, n::Integer) where T
-        return new{T}(Vector{T}(undef, n), Set{Int}())
-    end
-    
-    function TrackedVector{T}(v::Vector{T}) where T
-        return new{T}(v, Set{Int}())
+    function ObservedVector{T}(::UndefInitializer, n::Integer) where T
+        new{T}(Vector{T}(undef, n), :unknown, nothing)
     end
 end
 
 # Implement AbstractArray interface
-Base.size(v::TrackedVector) = size(v.data)
-Base.getindex(v::TrackedVector{T}, i::Integer) where T = begin
-    push!(v._accessed, i)
+Base.size(v::ObservedVector) = size(v.data)
+Base.getindex(v::ObservedVector{T}, i::Integer) where T = begin
     element = v.data[i]
     if hasfield(typeof(element), :_container)
         setfield!(element, :_container, v)
@@ -144,7 +41,7 @@ Base.getindex(v::TrackedVector{T}, i::Integer) where T = begin
     element
 end
 
-Base.setindex!(v::TrackedVector{T}, x, i::Integer) where T = begin
+Base.setindex!(v::ObservedVector{T}, x, i::Integer) where T = begin
     v.data[i] = x
     if hasfield(typeof(x), :_container)
         setfield!(x, :_container, v)
@@ -154,225 +51,236 @@ Base.setindex!(v::TrackedVector{T}, x, i::Integer) where T = begin
 end
 
 # Track property access on elements
-function Base.getproperty(v::TrackedVector, field::Symbol)
-    if field in (:data, :_accessed)
+function Base.getproperty(v::ObservedVector, field::Symbol)
+    if field in (:data, :array_name, :physical_state)
         return getfield(v, field)
     else
-        error("Field $field not found in TrackedVector")
+        error("Field $field not found in ObservedVector")
     end
 end
 
-function Base.setproperty!(v::TrackedVector, field::Symbol, value)
-    if field in (:data, :_accessed)
+function Base.setproperty!(v::ObservedVector, field::Symbol, value)
+    if field in (:data, :array_name, :physical_state)
         setfield!(v, field, value)
     else
-        error("Cannot set field $field in TrackedVector")
+        error("Cannot set field $field in ObservedVector")
     end
 end
 
-"""
-    gotten(obj)
+# Notification methods
+function notify_read(v::ObservedVector, index::Int, field::Symbol)
+    if v.physical_state !== nothing
+        notify_read(v.physical_state, v.array_name, index, field)
+    end
+end
 
-Returns the set of fields that have been accessed.
+function notify_write(v::ObservedVector, index::Int, field::Symbol)
+    if v.physical_state !== nothing
+        notify_write(v.physical_state, v.array_name, index, field)
+    end
+end
+
+# For compatibility with existing interface
+gotten(v::ObservedVector) = Set{Tuple}()  # Tracking is at state level
+changed(v::ObservedVector) = Set{Tuple}()  # Tracking is at state level
+reset_tracking!(v::ObservedVector) = v
+reset_gotten!(v::ObservedVector) = v
+
+# Use TrackedVector as alias for compatibility
+const TrackedVector = ObservedVector
+
 """
-function gotten(obj::TrackedVector)
-    result = Set{Tuple}()
-    for i in obj._accessed
-        element = obj.data[i]
-        if hasfield(typeof(element), :_gotten) && getfield(element, :_gotten) !== nothing
-            for field in getfield(element, :_gotten)
-                push!(result, (i, field))
+Creates an element type with notification capability
+"""
+function create_element_type(type_name::Symbol, fields::Vector)
+    field_names = [field[1] for field in fields]
+    field_types = [field[2] for field in fields]
+    
+    # Build the struct definition with fields
+    field_defs = [Expr(:(::), fname, ftype) for (fname, ftype) in fields]
+    
+    struct_def = quote
+        mutable struct $type_name
+            $(field_defs...)
+            _container::Union{Nothing, ObservedVector}
+            _index::Union{Nothing, Int}
+            
+            function $type_name($([fname for fname in field_names]...))
+                new($([fname for fname in field_names]...), nothing, nothing)
             end
         end
     end
-    result
-end
-
-"""
-    changed(obj)
-
-Returns the set of fields that have been modified.
-"""
-function changed(obj::TrackedVector)
-    result = Set{Tuple}()
-    for i in obj._accessed
-        element = obj.data[i]
-        if hasfield(typeof(element), :_changed) && getfield(element, :_changed) !== nothing
-            for field in getfield(element, :_changed)
-                push!(result, (i, field))
+    
+    # Create getproperty that notifies on read
+    getprop_def = quote
+        function Base.getproperty(obj::$type_name, field::Symbol)
+            if field in (:_container, :_index)
+                return getfield(obj, field)
+            else
+                container = getfield(obj, :_container)
+                if container !== nothing && getfield(obj, :_index) !== nothing
+                    notify_read(container, getfield(obj, :_index), field)
+                end
+                return getfield(obj, field)
             end
         end
     end
-    result
-end
-
-"""
-    reset_tracking!(obj)
-
-Reset all tracking information.
-"""
-function reset_tracking!(obj::TrackedVector)
-    empty!(obj._accessed)
-    for element in obj.data
-        if hasfield(typeof(element), :_gotten) && getfield(element, :_gotten) !== nothing
-            empty!(getfield(element, :_gotten))
-        end
-        if hasfield(typeof(element), :_changed) && getfield(element, :_changed) !== nothing
-            empty!(getfield(element, :_changed))
+    
+    # Create setproperty that notifies on write
+    setprop_def = quote
+        function Base.setproperty!(obj::$type_name, field::Symbol, value)
+            if field in (:_container, :_index)
+                setfield!(obj, field, value)
+            else
+                container = getfield(obj, :_container)
+                if container !== nothing && getfield(obj, :_index) !== nothing
+                    notify_write(container, getfield(obj, :_index), field)
+                end
+                setfield!(obj, field, value)
+            end
         end
     end
-    obj
-end
-
-"""
-    reset_gotten!(obj)
-
-Reset the tracking of accessed fields.
-"""
-function reset_gotten!(obj::TrackedVector)
-    for element in obj.data
-        if hasfield(typeof(element), :_gotten) && getfield(element, :_gotten) !== nothing
-            empty!(getfield(element, :_gotten))
+    
+    # Create propertynames for introspection
+    propnames_def = quote
+        function Base.propertynames(obj::$type_name, private::Bool=false)
+            if private
+                return fieldnames($type_name)
+            else
+                return $(field_names)
+            end
         end
     end
-    obj
-end
-
-# Helper function to check if property exists
-function hasproperty(obj, prop::Symbol)
-    return prop in fieldnames(typeof(obj))
-end
-
-
-abstract type TrackedState <: PhysicalState end
-
-"""
-Iterate over all tracked vectors in the physical state.
-"""
-function over_tracked_physical_state(fcallback::Function, physical::T) where {T <: TrackedState}
-    for field_symbol in fieldnames(T)
-        member = getproperty(physical, field_symbol)
-        if isa(member, TrackedVector)
-            fcallback(field_symbol, member)
+    
+    # Create equality comparison
+    field_comparisons = [:(getproperty(a, $(QuoteNode(fname))) == getproperty(b, $(QuoteNode(fname)))) for fname in field_names]
+    eq_expr = length(field_comparisons) > 0 ? Expr(:&&, field_comparisons...) : true
+    
+    eq_def = quote
+        function Base.:(==)(a::$type_name, b::$type_name)
+            $eq_expr
         end
     end
-end
-
-
-"""
-Return a list of changed places in the physical state.
-A place for this state is a tuple of a symbol and the Cartesian index.
-The symbol is the name of the array within the PhysicalState.
-"""
-function changed(physical::TrackedState)
-    places = Set{Tuple}()
-    over_tracked_physical_state(physical) do fieldname, member
-        union!(places, [(fieldname, key...) for key in changed(member)])
-    end
-    return places
-end
-
-
-"""
-Return a list of changed places in the physical state.
-A place for this state is a tuple of a symbol and the Cartesian index.
-The symbol is the name of the array within the PhysicalState.
-"""
-function wasread(physical::TrackedState)
-    places = Set{Tuple}()
-    over_tracked_physical_state(physical) do fieldname, member
-        union!(places, [(fieldname, key...) for key in gotten(member)])
-    end
-    return places
+    
+    # Evaluate all definitions
+    eval(struct_def)
+    eval(getprop_def)
+    eval(setprop_def)
+    eval(propnames_def)
+    eval(eq_def)
+    
+    return eval(type_name)
 end
 
 """
-Return a list of changed places in the physical state.
-A place for this state is a tuple of a symbol and the Cartesian index.
-The symbol is the name of the array within the PhysicalState.
+    ObservedState
+
+A physical state that maintains centralized tracking of reads and writes.
 """
-function resetread(physical::TrackedState)
-    over_tracked_physical_state(physical) do _, member
-        reset_gotten!(member)
+abstract type ObservedState <: PhysicalState end
+
+# These will be implemented by the generated state types
+function notify_read end
+function notify_write end
+
+# Create a concrete state type with tracking
+function create_state_type(field_names::Vector{Symbol}, field_types::Vector)
+    state_type_name = gensym("ObservedState")
+    
+    # Build field definitions
+    field_defs = [Expr(:(::), fname, ftype) for (fname, ftype) in zip(field_names, field_types)]
+    
+    state_def = quote
+        mutable struct $state_type_name <: ObservedState
+            $(field_defs...)
+            _reads::Set{PlaceType}
+            _writes::Set{PlaceType}
+            
+            function $state_type_name($([fname for fname in field_names]...))
+                new($([fname for fname in field_names]...), Set{PlaceType}(), Set{PlaceType}())
+            end
+        end
     end
-    return physical
+    
+    # Implement notification methods
+    notify_read_def = quote
+        function notify_read(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
+            push!(getfield(state, :_reads), (array_name, index, field))
+        end
+    end
+    
+    notify_write_def = quote
+        function notify_write(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
+            push!(getfield(state, :_writes), (array_name, index, field))
+        end
+    end
+    
+    eval(state_def)
+    eval(notify_read_def)
+    eval(notify_write_def)
+    
+    return eval(state_type_name)
 end
 
+# Implement the required interface functions
+function changed(state::ObservedState)
+    return getfield(state, :_writes)
+end
 
-"""
-The arrays in a PhysicalState record that they have been modified.
-This function erases the record of modifications.
-"""
-function accept(physical::TrackedState)
-    over_tracked_physical_state(physical) do _, member
-        reset_tracking!(member)
-    end
-    return physical
+function wasread(state::ObservedState)
+    return getfield(state, :_reads)
+end
+
+function accept(state::ObservedState)
+    empty!(getfield(state, :_reads))
+    empty!(getfield(state, :_writes))
+    return state
+end
+
+function resetread(state::ObservedState)
+    empty!(getfield(state, :_reads))
+    return state
 end
 
 """
     ConstructState(specification, counts)
 
-Creates a PhysicalState with TrackedVector arrays populated with tracked structs
-based on the specification.
-
-# Arguments
-- `specification`: Vector of pairs where each pair is :field_name => [field_defs]
-- `counts`: Dict mapping field names to array sizes
-
-# Example
-```julia
-spec = [:people => [:health => Symbol, :age => Int]]
-state = ConstructState(spec, Dict(:people => 3))
-```
+Creates an ObservedState with ObservedVector arrays populated with observable structs.
 """
 function ConstructState(specification, counts)
-    # Generate struct types and create TrackedVectors
+    # Generate element types and create ObservedVectors
     fields = []
     
     for (array_name, field_specs) in specification
-        # Create the tracked struct type dynamically
-        struct_name = Symbol(string(array_name) * "_type")
-        
-        # Build field expressions for the macro
-        field_exprs = []
-        for (field_name, field_type) in field_specs
-            push!(field_exprs, :($field_name::$field_type))
-        end
-        
-        # Create the struct using eval
-        struct_def = quote
-            @tracked_struct $struct_name begin
-                $(field_exprs...)
-            end
-        end
-        eval(struct_def)
+        # Create the element type
+        struct_name = gensym(string(array_name) * "_type")
+        element_type = create_element_type(struct_name, field_specs)
         
         # Get the count for this array
         count = counts[array_name]
         
-        # Create TrackedVector with uninitialized tracked structs
-        tracked_vec = TrackedVector{eval(struct_name)}(undef, count)
+        # Create ObservedVector
+        observed_vec = ObservedVector{element_type}(undef, count)
+        observed_vec.array_name = array_name
         
-        push!(fields, array_name => tracked_vec)
+        push!(fields, array_name => observed_vec)
     end
     
-    # Create anonymous TrackedState struct
-    state_type_name = gensym("TrackedState")
+    # Create the state type
     field_names = [pair[1] for pair in fields]
-    field_types = [:(TrackedVector{$(Symbol(string(name) * "_type"))}) for name in field_names]
+    field_types = [typeof(pair[2]) for pair in fields]
+    state_type = create_state_type(field_names, field_types)
     
-    # Create the TrackedState type
-    state_def = quote
-        struct $state_type_name <: TrackedState
-            $([:($name::$typ) for (name, typ) in zip(field_names, field_types)]...)
-        end
-    end
-    eval(state_def)
-    
-    # Create and return instance
+    # Create state instance
     field_values = [pair[2] for pair in fields]
-    return Base.invokelatest(eval(state_type_name), field_values...)
+    physical_state = Base.invokelatest(state_type, field_values...)
+    
+    # Set back-references from vectors to state
+    for (array_name, vec) in fields
+        vec.physical_state = physical_state
+    end
+    
+    return physical_state
 end
 
 end
