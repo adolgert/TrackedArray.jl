@@ -190,11 +190,11 @@ function create_state_type(field_names::Vector{Symbol}, field_types::Vector)
     state_def = quote
         mutable struct $state_type_name <: ObservedState
             $(field_defs...)
-            _reads::Set{PlaceType}
-            _writes::Set{PlaceType}
+            _reads::Vector{PlaceType}
+            _writes::Vector{PlaceType}
             
             function $state_type_name($([fname for fname in field_names]...))
-                new($([fname for fname in field_names]...), Set{PlaceType}(), Set{PlaceType}())
+                new($([fname for fname in field_names]...), PlaceType[], PlaceType[])
             end
         end
     end
@@ -221,11 +221,11 @@ end
 
 # Implement the required interface functions
 function changed(state::ObservedState)
-    return getfield(state, :_writes)
+    return Set(getfield(state, :_writes))
 end
 
 function wasread(state::ObservedState)
-    return getfield(state, :_reads)
+    return Set(getfield(state, :_reads))
 end
 
 function accept(state::ObservedState)
