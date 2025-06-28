@@ -134,7 +134,7 @@ end
                 end
                 nothing
             end
-            @test length(writeres.changes) = length(written)
+            @test length(writeres.changes) == length(written)
             for elem in written
                 @test elem ∈ writeres.changes
             end
@@ -153,7 +153,7 @@ end
                 end
                 nothing
             end
-            @test length(readres.reads) = length(read)
+            @test length(readres.reads) == length(read)
             for elem in read
                 @test elem ∈ readres.reads
             end
