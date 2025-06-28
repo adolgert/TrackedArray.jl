@@ -14,10 +14,10 @@ There are two approaches to tracking changes to elements of a vector.
     
 """
 module Original
-
+import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
 using MacroTools
 
-export @tracked_struct, TrackedVector
+export @tracked_struct, TrackedVector, ConstructState
 export gotten, changed, reset_tracking!, reset_gotten!
 
 """
@@ -242,4 +242,137 @@ end
 function hasproperty(obj, prop::Symbol)
     return prop in fieldnames(typeof(obj))
 end
+
+
+abstract type TrackedState <: PhysicalState end
+
+"""
+Iterate over all tracked vectors in the physical state.
+"""
+function over_tracked_physical_state(fcallback::Function, physical::T) where {T <: TrackedState}
+    for field_symbol in fieldnames(T)
+        member = getproperty(physical, field_symbol)
+        if isa(member, TrackedVector)
+            fcallback(field_symbol, member)
+        end
+    end
+end
+
+
+"""
+Return a list of changed places in the physical state.
+A place for this state is a tuple of a symbol and the Cartesian index.
+The symbol is the name of the array within the PhysicalState.
+"""
+function changed(physical::TrackedState)
+    places = Set{Tuple}()
+    over_tracked_physical_state(physical) do fieldname, member
+        union!(places, [(fieldname, key...) for key in changed(member)])
+    end
+    return places
+end
+
+
+"""
+Return a list of changed places in the physical state.
+A place for this state is a tuple of a symbol and the Cartesian index.
+The symbol is the name of the array within the PhysicalState.
+"""
+function wasread(physical::TrackedState)
+    places = Set{Tuple}()
+    over_tracked_physical_state(physical) do fieldname, member
+        union!(places, [(fieldname, key...) for key in gotten(member)])
+    end
+    return places
+end
+
+"""
+Return a list of changed places in the physical state.
+A place for this state is a tuple of a symbol and the Cartesian index.
+The symbol is the name of the array within the PhysicalState.
+"""
+function resetread(physical::TrackedState)
+    over_tracked_physical_state(physical) do _, member
+        reset_gotten!(member)
+    end
+    return physical
+end
+
+
+"""
+The arrays in a PhysicalState record that they have been modified.
+This function erases the record of modifications.
+"""
+function accept(physical::TrackedState)
+    over_tracked_physical_state(physical) do _, member
+        reset_tracking!(member)
+    end
+    return physical
+end
+
+"""
+    ConstructState(specification, counts)
+
+Creates a PhysicalState with TrackedVector arrays populated with tracked structs
+based on the specification.
+
+# Arguments
+- `specification`: Vector of pairs where each pair is :field_name => [field_defs]
+- `counts`: Dict mapping field names to array sizes
+
+# Example
+```julia
+spec = [:people => [:health => Symbol, :age => Int]]
+state = ConstructState(spec, Dict(:people => 3))
+```
+"""
+function ConstructState(specification, counts)
+    # Generate struct types and create TrackedVectors
+    fields = []
+    
+    for (array_name, field_specs) in specification
+        # Create the tracked struct type dynamically
+        struct_name = Symbol(string(array_name) * "_type")
+        
+        # Build field expressions for the macro
+        field_exprs = []
+        for (field_name, field_type) in field_specs
+            push!(field_exprs, :($field_name::$field_type))
+        end
+        
+        # Create the struct using eval
+        struct_def = quote
+            @tracked_struct $struct_name begin
+                $(field_exprs...)
+            end
+        end
+        eval(struct_def)
+        
+        # Get the count for this array
+        count = counts[array_name]
+        
+        # Create TrackedVector with uninitialized tracked structs
+        tracked_vec = TrackedVector{eval(struct_name)}(undef, count)
+        
+        push!(fields, array_name => tracked_vec)
+    end
+    
+    # Create anonymous TrackedState struct
+    state_type_name = gensym("TrackedState")
+    field_names = [pair[1] for pair in fields]
+    field_types = [:(TrackedVector{$(Symbol(string(name) * "_type"))}) for name in field_names]
+    
+    # Create the TrackedState type
+    state_def = quote
+        struct $state_type_name <: TrackedState
+            $([:($name::$typ) for (name, typ) in zip(field_names, field_types)]...)
+        end
+    end
+    eval(state_def)
+    
+    # Create and return instance
+    field_values = [pair[2] for pair in fields]
+    return Base.invokelatest(eval(state_type_name), field_values...)
+end
+
 end

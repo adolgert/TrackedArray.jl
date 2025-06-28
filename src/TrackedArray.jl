@@ -1,5 +1,8 @@
 module TrackedArray
 
-# Write your package code here.
+# Define the overall interface and testing.
+include("abstract.jl")
+
+# Specific systems-under-test.
 include("tracked.jl")
 end

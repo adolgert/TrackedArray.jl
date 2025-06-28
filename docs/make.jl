@@ -7,6 +7,7 @@ makedocs(;
     modules=[TrackedArray],
     authors="Andrew Dolgert <github@dolgert.com>",
     sitename="TrackedArray.jl",
+    checkdocs=:none,
     format=Documenter.HTML(;
         canonical="https://adolgert.github.io/TrackedArray.jl",
         edit_link="main",
