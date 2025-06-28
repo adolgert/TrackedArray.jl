@@ -91,7 +91,7 @@ end
         if activity == 1
             @test write_n(physical_state, every_key, rand(rng, 0:length(every_key)), rng)
         elseif activity == 2
-            @test read_n(physical, every_key, rand(rng, 0:length(every_key)), rng)
+            @test read_n(physical_state, every_key, rand(rng, 0:length(every_key)), rng)
         end
     end
 end
