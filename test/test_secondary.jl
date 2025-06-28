@@ -4,8 +4,8 @@ using Base
 using Logging
 
 
-@testset "Dealer: Construction from minimal specification" begin
-    using TrackedArray.Dealer
+@testset "Secondary: Construction from minimal specification" begin
+    using TrackedArray.Secondary
 
     specification = [
         :people => [
@@ -18,7 +18,7 @@ using Logging
             :population => Int
         ]
     ]
-    physical_state = TrackedArray.Dealer.ConstructState(specification, Dict(:people => 3, :places => 2))
+    physical_state = TrackedArray.Secondary.ConstructState(specification, Dict(:people => 3, :places => 2))
     @assert !(physical_state isa Type)
 
     # Test structural properties.
@@ -35,15 +35,15 @@ using Logging
 end
 
 
-@testset "Dealer: Consistency and correctness" begin
+@testset "Secondary: Consistency and correctness" begin
     using Distributions
     using Random
-    using TrackedArray.Dealer
+    using TrackedArray.Secondary
     rng = Xoshiro(9876234982)
 
     specification = random_specification(rng)
     counts = Dict(arr_name => rand(rng, 1:10) for (arr_name, _) in specification)
-    physical_state = TrackedArray.Dealer.ConstructState(specification, counts)
+    physical_state = TrackedArray.Secondary.ConstructState(specification, counts)
 
     # These represent our model of what was read or written.
     read = Set{PlaceType}()
@@ -54,7 +54,7 @@ end
     every_key = all_keys(specification, physical_state)
     initialize_physical!(specification, physical_state)
 
-    logger = ConsoleLogger(stderr, Logging.Debug)
+    logger = ConsoleLogger(stderr, Logging.Info)
     with_logger(logger) do
         @debug "Starting test loop with $(length(every_key)) available keys"
         for step_idx in 1:50

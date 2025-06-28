@@ -2,7 +2,7 @@
 This module implements an immutable tracking system using bitfields and structural sharing
 for efficient memory usage and functional programming style.
 """
-module Dealer
+module Secondary
 import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
 import ..TrackedArray: PlaceType
 
@@ -118,17 +118,17 @@ end
 Base.:(==)(a::TrackedElement, b::TrackedElement) = a.value == b.value
 
 """
-    DealerVector{T}
+    SecondaryVector{T}
 
 Immutable tracked vector that maintains tracking state functionally.
 """
-mutable struct DealerVector{T} <: AbstractVector{T}
+mutable struct SecondaryVector{T} <: AbstractVector{T}
     const data::Vector{TrackedElement{T}}
     array_name::Symbol
     tracking::TrackingState
     physical_state::Any  # Mutable reference to physical state
     
-    function DealerVector{T}(::UndefInitializer, n::Integer) where T
+    function SecondaryVector{T}(::UndefInitializer, n::Integer) where T
         elements = Vector{TrackedElement{T}}(undef, n)
         arr_ref = Ref{Any}(nothing)
         for i in 1:n
@@ -142,7 +142,7 @@ mutable struct DealerVector{T} <: AbstractVector{T}
         return vec
     end
     
-    function DealerVector{T}(::UndefInitializer, n::Integer, name::Symbol) where T
+    function SecondaryVector{T}(::UndefInitializer, n::Integer, name::Symbol) where T
         elements = Vector{TrackedElement{T}}(undef, n)
         arr_ref = Ref{Any}(nothing)
         for i in 1:n
@@ -158,26 +158,20 @@ mutable struct DealerVector{T} <: AbstractVector{T}
 end
 
 # AbstractArray interface
-Base.size(v::DealerVector) = size(v.data)
+Base.size(v::SecondaryVector) = size(v.data)
 
-function Base.getindex(v::DealerVector{T}, i::Integer) where T
-    elem = v.data[i].value
-    # Set container reference for tracking
-    if hasfield(typeof(elem), :_container) && hasfield(typeof(elem), :_index)
-        setfield!(elem, :_container, v)
-        setfield!(elem, :_index, i)
-    end
-    return elem
+function Base.getindex(v::SecondaryVector{T}, i::Integer) where T
+    return v.data[i].value
 end
 
-function Base.setindex!(v::DealerVector{T}, x, i::Integer) where T
+function Base.setindex!(v::SecondaryVector{T}, x, i::Integer) where T
     # Create new element wrapper
     v.data[i] = TrackedElement{T}(x, Ref{Any}(v), i)
     return x
 end
 
 # Notification handlers
-function notify_element_read(v::DealerVector, index::Int, field::Symbol)
+function notify_element_read(v::SecondaryVector, index::Int, field::Symbol)
     # Update tracking state immutably
     v.tracking = mark_read(v.tracking, index, field)
     
@@ -187,7 +181,7 @@ function notify_element_read(v::DealerVector, index::Int, field::Symbol)
     end
 end
 
-function notify_element_write(v::DealerVector, index::Int, field::Symbol)
+function notify_element_write(v::SecondaryVector, index::Int, field::Symbol)
     # Update tracking state immutably
     v.tracking = mark_write(v.tracking, index, field)
     
@@ -198,52 +192,52 @@ function notify_element_write(v::DealerVector, index::Int, field::Symbol)
 end
 
 # Tracking interface
-function gotten(v::DealerVector)
+function gotten(v::SecondaryVector)
     return get_reads(v.tracking)
 end
 
-function changed(v::DealerVector)
+function changed(v::SecondaryVector)
     return get_writes(v.tracking)
 end
 
-function reset_tracking!(v::DealerVector)
+function reset_tracking!(v::SecondaryVector)
     v.tracking = clear_all(v.tracking)
     return v
 end
 
-function reset_gotten!(v::DealerVector)
+function reset_gotten!(v::SecondaryVector)
     v.tracking = clear_reads(v.tracking)
     return v
 end
 
 # Property access
-function Base.getproperty(v::DealerVector, field::Symbol)
+function Base.getproperty(v::SecondaryVector, field::Symbol)
     if field in (:data, :array_name, :tracking, :physical_state)
         return getfield(v, field)
     else
-        error("Field $field not found in DealerVector")
+        error("Field $field not found in SecondaryVector")
     end
 end
 
-function Base.setproperty!(v::DealerVector, field::Symbol, value)
+function Base.setproperty!(v::SecondaryVector, field::Symbol, value)
     if field === :tracking || field === :physical_state
         setfield!(v, field, value)
     elseif field === :array_name
         setfield!(v, field, value)
     else
-        error("Cannot set field $field in DealerVector")
+        error("Cannot set field $field in SecondaryVector")
     end
 end
 
 # Alias for compatibility
-const TrackedVector = DealerVector
+const TrackedVector = SecondaryVector
 
 """
-    DealerState
+    SecondaryState
 
 Physical state with centralized tracking using immutable data structures.
 """
-abstract type DealerState <: PhysicalState end
+abstract type SecondaryState <: PhysicalState end
 
 # These will be implemented by the generated state types
 function notify_read end
@@ -252,7 +246,7 @@ function notify_write end
 """
     create_element_type(name, fields)
 
-Creates a mutable struct type for array elements with tracking support.
+Creates a simple mutable struct type for array elements.
 """
 function create_element_type(type_name::Symbol, fields::Vector)
     field_defs = [Expr(:(::), fname, ftype) for (fname, ftype) in fields]
@@ -261,12 +255,10 @@ function create_element_type(type_name::Symbol, fields::Vector)
     struct_def = quote
         mutable struct $type_name
             $(field_defs...)
-            _container::Union{Nothing, DealerVector}
-            _index::Union{Nothing, Int}
             
             # Constructor for normal initialization
             function $type_name($([fname for fname in field_names]...))
-                new($([fname for fname in field_names]...), nothing, nothing)
+                new($([fname for fname in field_names]...))
             end
             
             # Constructor for undef initialization
@@ -276,49 +268,8 @@ function create_element_type(type_name::Symbol, fields::Vector)
         end
     end
     
-    # Create getproperty that tracks reads
-    getprop_def = quote
-        function Base.getproperty(obj::$type_name, field::Symbol)
-            if field in (:_container, :_index)
-                return getfield(obj, field)
-            else
-                container = getfield(obj, :_container)
-                if container !== nothing && getfield(obj, :_index) !== nothing
-                    notify_element_read(container, getfield(obj, :_index), field)
-                end
-                return getfield(obj, field)
-            end
-        end
-    end
-    
-    # Create setproperty that tracks writes
-    setprop_def = quote
-        function Base.setproperty!(obj::$type_name, field::Symbol, value)
-            if field in (:_container, :_index)
-                setfield!(obj, field, value)
-            else
-                container = getfield(obj, :_container)
-                if container !== nothing && getfield(obj, :_index) !== nothing
-                    notify_element_write(container, getfield(obj, :_index), field)
-                end
-                setfield!(obj, field, value)
-            end
-        end
-    end
-    
-    # Create propertynames for introspection
-    propnames_def = quote
-        function Base.propertynames(obj::$type_name, private::Bool=false)
-            if private
-                return fieldnames($type_name)
-            else
-                return $(field_names)
-            end
-        end
-    end
-    
     # Create a simple equality operator
-    eq_comparisons = [:(getproperty(a, $(QuoteNode(fname))) == getproperty(b, $(QuoteNode(fname)))) for fname in field_names]
+    eq_comparisons = [:(a.$fname == b.$fname) for fname in field_names]
     eq_expr = length(eq_comparisons) > 0 ? Expr(:&&, eq_comparisons...) : true
     
     eq_def = quote
@@ -326,9 +277,6 @@ function create_element_type(type_name::Symbol, fields::Vector)
     end
     
     eval(struct_def)
-    eval(getprop_def)
-    eval(setprop_def)
-    eval(propnames_def)
     eval(eq_def)
     
     return eval(type_name)
@@ -337,7 +285,7 @@ end
 """
     ConstructState(specification, counts)
 
-Creates a DealerState with tracked arrays.
+Creates a SecondaryState with tracked arrays.
 """
 function ConstructState(specification, counts)
     # Create arrays
@@ -352,19 +300,19 @@ function ConstructState(specification, counts)
         
         # Create tracked vector
         count = counts[array_name]
-        vec = DealerVector{element_type}(undef, count, array_name)
+        vec = SecondaryVector{element_type}(undef, count, array_name)
         
         push!(arrays, vec)
         push!(field_names, array_name)
-        push!(field_types, DealerVector{element_type})
+        push!(field_types, SecondaryVector{element_type})
     end
     
     # Create a custom state type
-    state_type_name = gensym("DealerState")
+    state_type_name = gensym("SecondaryState")
     field_defs = [Expr(:(::), fname, ftype) for (fname, ftype) in zip(field_names, field_types)]
     
     state_def = quote
-        mutable struct $state_type_name <: DealerState
+        mutable struct $state_type_name <: SecondaryState
             $(field_defs...)
             _reads::Set{PlaceType}
             _writes::Set{PlaceType}
