@@ -65,3 +65,98 @@ end
         end
     end
 end
+
+@testset "Consistency and correctness" begin
+    using Distributions
+    using Random
+    using TrackedArray.Original
+    rng = Xoshiro(9876234982)
+
+    specification = [
+        :people => [
+            :health => Symbol,
+            :age => Int,
+            :location => Int
+        ]
+        :places => [
+            :name => String,
+            :population => Int
+        ]
+    ]
+    physical_state = ConstructState(specification, Dict(:people => 3, :places => 2))
+
+    const PlaceType=Tuple{Symbol,Int,Symbol}
+    # These represent our model of what was read or written.
+    read = Set{PlaceType}()
+    written = Set{PlaceType}()
+
+    # Convert specification to dicts for easier work.
+    dictspec = Dict{Symbol,Dict{Symbol,DataType}}()
+    for component_idx in eachindex(specification)
+        component_name, fields = specification[component_idx]
+        for (field, field_type) in fields
+            if !haskey(dictspec, component_name)
+                dictspec[component_name] = Dict{Symbol,DataType}()
+            end
+            dictspec[component_name][field] = field_type
+        end
+    end
+
+    # Default initialization
+    defval = Dict(
+        Symbol => [:none, :what, :infected, :dead, :moving, :staying],
+        Int => [1, 7, 3, 6, 9, 11],
+        String => ["hi", "Bob", "fl", "wy", "ar"],
+        Float64 => [1.0, 2.0, 3.14, 2.71828, 1.618]
+        )
+    for component_idx in eachindex(specification)
+        component_name, fields = specification[component_idx]
+        component = getfield(physical_state, component_name)
+        for (field, field_type) in fields
+            setproperty!(component, field, rand(rng, defval[field_type]))
+        end
+    end
+
+    for step_idx in 1:5
+        activity = rand(rng, 1:2)
+        if activity == 1
+            empty!(written)
+            writeres = capture_state_changes(physical_state) do
+                spots = rand(rng, 1:10)
+                for spot in 1:spots
+                    arr_name = rand(rng, keys(dictspec))
+                    arr = getproperty(physical_state, arr_name)
+                    elemidx = rand(rng, 1:length(arr))
+                    member = rand(rng, keys(dictspec[arr_name]))
+                    elemval = rand(rng, defval[dictspec[arr_name][member]])
+                    setproperty!(arr[elemidx], member, elemval)
+                    push!(written, (arr_name, elemidx, member))
+                end
+                nothing
+            end
+            @test length(writeres.changes) = length(written)
+            for elem in written
+                @test elem ∈ writeres.changes
+            end
+        elseif activity == 2
+            empty!(read)
+            readres = capture_state_reads(physical_state) do
+                spots = rand(rng, 1:10)
+                for spot in 1:spots
+                    arr_name = rand(rng, keys(dictspec))
+                    arr = getproperty(physical_state, arr_name)
+                    elemidx = rand(rng, 1:length(arr))
+                    member = rand(rng, keys(dictspec[arr_name]))
+                    elemval = rand(rng, defval[dictspec[arr_name][member]])
+                    getproperty!(arr[elemidx], member, elemval)
+                    push!(read, (arr_name, elemidx, member))
+                end
+                nothing
+            end
+            @test length(readres.reads) = length(read)
+            for elem in read
+                @test elem ∈ readres.reads
+            end
+        end
+    end
+end
