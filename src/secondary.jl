@@ -1,12 +1,13 @@
 """
-This module implements a "Registry" tracking system.
-- At construction, it builds a complete mapping from each trackable place
-  (array, index, field) to a unique integer index.
+This module implements an "Arithmetic Registry" tracking system.
+- At construction, it lays out all trackable places contiguously in memory
+  and builds a reverse mapping from an integer index to a place identifier.
 - Read/write status for all places is stored in two large, pre-allocated
   BitVectors.
-- Accessing an element's field flips the corresponding bit in the BitVector.
-- This design has a higher upfront cost at construction but aims for very
-  fast access tracking and state querying.
+- Accessing an element's field triggers a fast arithmetic calculation to find
+  the correct bit to flip in the BitVector, avoiding a slow global dictionary
+  lookup.
+- This design has a higher upfront cost but provides extremely fast tracking, querying, and state-reset operations.
 """
 module Secondary
 import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState, PlaceType
@@ -28,10 +29,14 @@ It holds a reference to the parent state and its own array name.
 mutable struct SecondaryVector{T} <: AbstractVector{T}
     data::Vector{T}
     array_name::Symbol
-    physical_state::Any # Will be set to the actual physical state
+    physical_state::Any # Will be set to the actual physical state by ConstructState
+    base_idx::Int       # 0-based index for the start of this vector's data in the global BitVector
+    field_map::Dict{Symbol, Int} # Maps field name to a 0-based offset
+    num_fields::Int     # The number of tracked fields in each element
 
     function SecondaryVector{T}(::UndefInitializer, n::Integer) where T
-        new{T}(Vector{T}(undef, n), :unknown, nothing)
+        # Remaining fields are initialized by ConstructState
+        new{T}(Vector{T}(undef, n), :unknown, nothing, 0, Dict{Symbol,Int}(), 0)
     end
 end
 
@@ -39,38 +44,41 @@ end
 Base.size(v::SecondaryVector) = size(v.data)
 
 function Base.getindex(v::SecondaryVector{T}, i::Integer) where T
+    @boundscheck checkbounds(v.data, i)
     element = v.data[i]
-    # Lazily set the back-references on the element when it's first accessed.
-    # This is crucial for the element to know how to notify its container.
-    if hasfield(typeof(element), :_container)
-        setfield!(element, :_container, v)
-        setfield!(element, :_index, i)
-    end
+    # Set back-references on the element. This is crucial for notifications.
+    # We can skip `hasfield` checks as we control the element's type generation.
+    setfield!(element, :_container, v)
+    setfield!(element, :_index, i)
     return element
 end
 
 function Base.setindex!(v::SecondaryVector{T}, x, i::Integer) where T
+    @boundscheck checkbounds(v.data, i)
     v.data[i] = x
-    # Also set back-references on the new element being placed in the vector.
-    if hasfield(typeof(x), :_container)
-        setfield!(x, :_container, v)
-        setfield!(x, :_index, i)
-    end
+    setfield!(x, :_container, v)
+    setfield!(x, :_index, i)
     return x
 end
 
 # --- Notification Forwarding ---
-# The vector's role is to forward notifications from its elements up to the
-# central physical state, adding its own `array_name` to the information.
 function notify_element_read(v::SecondaryVector, index::Int, field::Symbol)
     if v.physical_state !== nothing
-        notify_read(v.physical_state, v.array_name, index, field)
+        field_offset = get(v.field_map, field, -1)
+        if field_offset != -1
+            bit_idx = v.base_idx + (index - 1) * v.num_fields + field_offset + 1
+            notify_read(v.physical_state, bit_idx)
+        end
     end
 end
 
 function notify_element_write(v::SecondaryVector, index::Int, field::Symbol)
     if v.physical_state !== nothing
-        notify_write(v.physical_state, v.array_name, index, field)
+        field_offset = get(v.field_map, field, -1)
+        if field_offset != -1
+            bit_idx = v.base_idx + (index - 1) * v.num_fields + field_offset + 1
+            notify_write(v.physical_state, bit_idx)
+        end
     end
 end
 
@@ -186,43 +194,53 @@ This involves dynamically generating a concrete state type and its associated
 element types, and pre-calculating the mapping from places to bit indices.
 """
 function ConstructState(specification, counts)
-    # --- 1. Build the Place-to-Integer Mappings ---
+    # --- 1. Build Mappings and Calculate Layout ---
     total_places = sum(length(field_specs) * counts[arr_name] for (arr_name, field_specs) in specification)
-    forward_map = Dict{PlaceType, Int}()
     reverse_map = Vector{PlaceType}(undef, total_places)
-    sizehint!(forward_map, total_places)
     
-    place_idx = 1
-    for (array_name, field_specs) in specification
-        num_elements = counts[array_name]
-        for (field_name, _) in field_specs
-            for i in 1:num_elements
-                key = (array_name, i, field_name)
-                forward_map[key] = place_idx
-                reverse_map[place_idx] = key
-                place_idx += 1
-            end
-        end
-    end
-
-    # --- 2. Generate Types and Create Vectors ---
     vectors = []
     state_field_names = Symbol[]
     state_field_types = []
+    
+    current_base_idx = 0
 
     for (array_name, field_specs) in specification
+        num_elements = counts[array_name]
+        num_fields = length(field_specs)
+
+        # Create field_map for this vector type
+        local_field_map = Dict{Symbol, Int}()
+        sizehint!(local_field_map, num_fields)
+
+        # Populate reverse_map and local_field_map
+        for (field_idx, (field_name, _)) in enumerate(field_specs)
+            field_offset = field_idx - 1 # 0-based
+            local_field_map[field_name] = field_offset
+            for elem_idx in 1:num_elements
+                # bit_idx is 1-based
+                bit_idx = current_base_idx + (elem_idx - 1) * num_fields + field_offset + 1
+                reverse_map[bit_idx] = (array_name, elem_idx, field_name)
+            end
+        end
+
+        # --- 2. Generate Types and Create Vector ---
         # Dynamically create the struct type for the elements of this array
         element_type_name = gensym(string(array_name) * "_type")
         element_type = create_element_type(element_type_name, field_specs)
 
         # Create the vector for this array
-        count = counts[array_name]
-        vec = SecondaryVector{element_type}(undef, count)
+        vec = SecondaryVector{element_type}(undef, num_elements)
         vec.array_name = array_name
+        vec.base_idx = current_base_idx
+        vec.field_map = local_field_map
+        vec.num_fields = num_fields
 
         push!(vectors, vec)
         push!(state_field_names, array_name)
         push!(state_field_types, typeof(vec))
+
+        # Update base index for the next array
+        current_base_idx += num_elements * num_fields
     end
 
     # --- 3. Dynamically Generate the State Struct and its Methods ---
@@ -233,31 +251,28 @@ function ConstructState(specification, counts)
     state_def = quote
         mutable struct $state_type_name <: SecondaryState
             $(state_field_defs...)
-            const _forward_map::Dict{PlaceType, Int}
             const _reverse_map::Vector{PlaceType}
             _reads::BitVector
             _writes::BitVector
 
-            function $state_type_name($(state_field_names...), fwd_map, rev_map, reads, writes)
-                new($(state_field_names...), fwd_map, rev_map, reads, writes)
+            function $state_type_name($(state_field_names...), rev_map, reads, writes)
+                new($(state_field_names...), rev_map, reads, writes)
             end
         end
     end
 
     # Notification methods that operate on this specific state type
     notify_read_def = quote
-        function notify_read(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
-            bit_idx = get(state._forward_map, (array_name, index, field), 0)
-            if bit_idx > 0
+        function notify_read(state::$state_type_name, bit_idx::Int)
+            if 1 <= bit_idx <= length(state._reads)
                 state._reads[bit_idx] = true
             end
         end
     end
 
     notify_write_def = quote
-        function notify_write(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
-            bit_idx = get(state._forward_map, (array_name, index, field), 0)
-            if bit_idx > 0
+        function notify_write(state::$state_type_name, bit_idx::Int)
+            if 1 <= bit_idx <= length(state._writes)
                 state._writes[bit_idx] = true
             end
         end
@@ -313,7 +328,7 @@ function ConstructState(specification, counts)
     # Prepare arguments for the state constructor
     read_bits = falses(total_places)
     write_bits = falses(total_places)
-    constructor_args = (vectors..., forward_map, reverse_map, read_bits, write_bits)
+    constructor_args = (vectors..., reverse_map, read_bits, write_bits)
     
     # Use invokelatest for type stability with dynamically generated types
     physical_state = Base.invokelatest(state_type, constructor_args...)
