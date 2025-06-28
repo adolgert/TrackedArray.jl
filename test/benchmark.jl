@@ -6,6 +6,7 @@ using TrackedArray
 import TrackedArray.Original as Original
 import TrackedArray.Observed as Observed
 import TrackedArray.Doubles as Doubles
+import TrackedArray.Dealer as Dealer
 
 
 function random_writes(every_key, physical, rng_seed)
@@ -124,8 +125,10 @@ function get_module_from_name(module_name::String)
         return Observed
     elseif module_name == "Doubles"
         return Doubles
+    elseif module_name == "Dealer"
+        return Dealer
     else
-        error("Unknown module: $module_name. Available modules: Original, Observed, Doubles")
+        error("Unknown module: $module_name. Available modules: Original, Observed, Doubles, Dealer")
     end
 end
 
@@ -141,7 +144,7 @@ function main()
     else
         # Test all available modules
         println("Benchmarking all modules")
-        all_modules = [Original, Observed, Doubles]
+        all_modules = [Original, Observed, Doubles, Dealer]
         benchmark_all(all_modules)
     end
 end
