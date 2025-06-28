@@ -66,10 +66,13 @@ end
     end
 end
 
+const PlaceType=Tuple{Symbol,Int,Symbol}
+
 @testset "Consistency and correctness" begin
     using Distributions
     using Random
     using TrackedArray.Original
+    using TrackedArray.Original: capture_state_changes, capture_state_reads
     rng = Xoshiro(9876234982)
 
     specification = [
@@ -85,7 +88,6 @@ end
     ]
     physical_state = ConstructState(specification, Dict(:people => 3, :places => 2))
 
-    const PlaceType=Tuple{Symbol,Int,Symbol}
     # These represent our model of what was read or written.
     read = Set{PlaceType}()
     written = Set{PlaceType}()
@@ -112,8 +114,16 @@ end
     for component_idx in eachindex(specification)
         component_name, fields = specification[component_idx]
         component = getfield(physical_state, component_name)
-        for (field, field_type) in fields
-            setproperty!(component, field, rand(rng, defval[field_type]))
+        element_type = eltype(component)
+        for elem_idx in eachindex(component)
+            # Initialize element with zero values first
+            field_names = [field for (field, _) in fields]
+            field_values = [field_type == Symbol ? :none : 
+                           field_type == Int ? 0 : 
+                           field_type == String ? "" : 
+                           field_type == Float64 ? 0.0 : 
+                           zero(field_type) for (_, field_type) in fields]
+            component[elem_idx] = element_type(field_values...)
         end
     end
 
@@ -148,7 +158,7 @@ end
                     elemidx = rand(rng, 1:length(arr))
                     member = rand(rng, keys(dictspec[arr_name]))
                     elemval = rand(rng, defval[dictspec[arr_name][member]])
-                    getproperty!(arr[elemidx], member, elemval)
+                    getproperty(arr[elemidx], member)
                     push!(read, (arr_name, elemidx, member))
                 end
                 nothing
