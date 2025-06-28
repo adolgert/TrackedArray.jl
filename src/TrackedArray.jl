@@ -5,4 +5,5 @@ include("abstract.jl")
 
 # Specific systems-under-test.
 include("tracked.jl")
+include("observed.jl")
 end

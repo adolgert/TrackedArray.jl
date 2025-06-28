@@ -4,6 +4,7 @@ using Random
 
 using TrackedArray
 import TrackedArray.Original as Original
+import TrackedArray.Observed as Observed
 
 
 function random_writes(every_key, physical, rng_seed)
@@ -118,8 +119,10 @@ end
 function get_module_from_name(module_name::String)
     if module_name == "Original"
         return Original
+    elseif module_name == "Observed"
+        return Observed
     else
-        error("Unknown module: $module_name. Available modules: Original")
+        error("Unknown module: $module_name. Available modules: Original, Observed")
     end
 end
 
@@ -135,7 +138,7 @@ function main()
     else
         # Test all available modules
         println("Benchmarking all modules")
-        all_modules = [Original]
+        all_modules = [Original, Observed]
         benchmark_all(all_modules)
     end
 end
