@@ -48,27 +48,37 @@ macro tracked_struct(typename, body)
     escaped_fields = [Expr(:(::), esc(field.args[1]), esc(field.args[2])) for field in fields]
     escaped_fieldnames = [esc(fname) for fname in fieldnames]
     
+    # Create tracking fields for each data field
+    track_fields = [Expr(:(::), Symbol(string(fname) * "_track"), Int) for fname in fieldnames]
+    escaped_track_fields = [Expr(:(::), esc(Symbol(string(fname) * "_track")), Int) for fname in fieldnames]
+    
     # Create the internal struct
     struct_def = quote
         mutable struct $(esc(typename))
             $(escaped_fields...)
+            $(escaped_track_fields...)
             _container::Union{Nothing, Any}
             _index::Union{Nothing, Int}
-            _gotten::Set{Symbol}
-            _changed::Set{Symbol}
             
             function $(esc(typename))($(escaped_fieldnames...))
-                return new($(escaped_fieldnames...), nothing, nothing, Set{Symbol}(), Set{Symbol}())
+                return new($(escaped_fieldnames...), $(zeros(Int, length(fieldnames))...), nothing, nothing)
             end
         end
     end
     
+    # Create list of tracking field names for exclusion
+    track_field_names = [Symbol(string(fname) * "_track") for fname in fieldnames]
+    all_internal_fields = [:_container, :_index, track_field_names...]
+    
     getprop_def = quote
         function Base.getproperty(obj::$(esc(typename)), field::Symbol)
-            if field in (:_container, :_index, :_gotten, :_changed)
+            if field in $(all_internal_fields)
                 return getfield(obj, field)
             else
-                push!(getfield(obj, :_gotten), field)
+                # Update tracking field
+                track_field = Symbol(string(field) * "_track")
+                current = getfield(obj, track_field)
+                setfield!(obj, track_field, current | 1)  # Set read bit
                 return getfield(obj, field)
             end
         end
@@ -76,10 +86,13 @@ macro tracked_struct(typename, body)
     
     setprop_def = quote
         function Base.setproperty!(obj::$(esc(typename)), field::Symbol, value)
-            if field in (:_container, :_index, :_gotten, :_changed)
+            if field in $(all_internal_fields)
                 setfield!(obj, field, value)
             else
-                push!(getfield(obj, :_changed), field)
+                # Update tracking field
+                track_field = Symbol(string(field) * "_track")
+                current = getfield(obj, track_field)
+                setfield!(obj, track_field, current | 2)  # Set write bit
                 setfield!(obj, field, value)
             end
         end
@@ -105,12 +118,19 @@ macro tracked_struct(typename, body)
         end
     end
     
+    # Create constants for the field lists to avoid runtime computation
+    const_def = quote
+        const $(esc(Symbol(string(typename) * "_DATA_FIELDS"))) = $(fieldnames)
+        const $(esc(Symbol(string(typename) * "_TRACK_FIELDS"))) = $(track_field_names)
+    end
+    
     return quote
         $(struct_def)
         $(getprop_def)
         $(setprop_def)
         $(propnames_def)
         $(eq_def)
+        $(const_def)
     end
 end
 
@@ -177,10 +197,22 @@ Returns the set of fields that have been accessed.
 """
 function gotten(obj::TrackedVector)
     result = Set{Tuple}()
+    if isempty(obj._accessed)
+        return result
+    end
+    
+    # Get data field names by filtering fieldnames (optimized for performance)
+    element = obj.data[first(obj._accessed)]
+    element_type = typeof(element)
+    all_fields = fieldnames(element_type)
+    data_fields = [f for f in all_fields if !endswith(string(f), "_track") && f ∉ (:_container, :_index)]
+    
     for i in obj._accessed
         element = obj.data[i]
-        if hasfield(typeof(element), :_gotten) && getfield(element, :_gotten) !== nothing
-            for field in getfield(element, :_gotten)
+        for field in data_fields
+            track_field = Symbol(string(field) * "_track")
+            track_value = getfield(element, track_field)
+            if track_value & 1 != 0  # Read bit is set
                 push!(result, (i, field))
             end
         end
@@ -195,10 +227,22 @@ Returns the set of fields that have been modified.
 """
 function changed(obj::TrackedVector)
     result = Set{Tuple}()
+    if isempty(obj._accessed)
+        return result
+    end
+    
+    # Get data field names by filtering fieldnames (optimized for performance)
+    element = obj.data[first(obj._accessed)]
+    element_type = typeof(element)
+    all_fields = fieldnames(element_type)
+    data_fields = [f for f in all_fields if !endswith(string(f), "_track") && f ∉ (:_container, :_index)]
+    
     for i in obj._accessed
         element = obj.data[i]
-        if hasfield(typeof(element), :_changed) && getfield(element, :_changed) !== nothing
-            for field in getfield(element, :_changed)
+        for field in data_fields
+            track_field = Symbol(string(field) * "_track")
+            track_value = getfield(element, track_field)
+            if track_value & 2 != 0  # Write bit is set
                 push!(result, (i, field))
             end
         end
@@ -213,12 +257,18 @@ Reset all tracking information.
 """
 function reset_tracking!(obj::TrackedVector)
     empty!(obj._accessed)
-    for element in obj.data
-        if hasfield(typeof(element), :_gotten) && getfield(element, :_gotten) !== nothing
-            empty!(getfield(element, :_gotten))
-        end
-        if hasfield(typeof(element), :_changed) && getfield(element, :_changed) !== nothing
-            empty!(getfield(element, :_changed))
+    if !isempty(obj.data)
+        # Get data field names by filtering fieldnames (optimized for performance)
+        element_type = eltype(obj)
+        all_fields = fieldnames(element_type)
+        data_fields = [f for f in all_fields if !endswith(string(f), "_track") && f ∉ (:_container, :_index)]
+        
+        for element in obj.data
+            # Reset all tracking fields to 0
+            for field in data_fields
+                track_field = Symbol(string(field) * "_track")
+                setfield!(element, track_field, 0)
+            end
         end
     end
     obj
@@ -230,9 +280,19 @@ end
 Reset the tracking of accessed fields.
 """
 function reset_gotten!(obj::TrackedVector)
-    for element in obj.data
-        if hasfield(typeof(element), :_gotten) && getfield(element, :_gotten) !== nothing
-            empty!(getfield(element, :_gotten))
+    if !isempty(obj.data)
+        # Get data field names by filtering fieldnames (optimized for performance)
+        element_type = eltype(obj)
+        all_fields = fieldnames(element_type)
+        data_fields = [f for f in all_fields if !endswith(string(f), "_track") && f ∉ (:_container, :_index)]
+        
+        for element in obj.data
+            # Reset only the read bit (bit 1), keep write bit (bit 2)
+            for field in data_fields
+                track_field = Symbol(string(field) * "_track")
+                current = getfield(element, track_field)
+                setfield!(element, track_field, current & 2)  # Keep only write bit
+            end
         end
     end
     obj
