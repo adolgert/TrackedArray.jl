@@ -74,18 +74,9 @@ end
     using TrackedArray.Original: capture_state_changes, capture_state_reads
     rng = Xoshiro(9876234982)
 
-    specification = [
-        :people => [
-            :health => Symbol,
-            :age => Int,
-            :location => Int
-        ]
-        :places => [
-            :name => String,
-            :population => Int
-        ]
-    ]
-    physical_state = ConstructState(specification, Dict(:people => 3, :places => 2))
+    specification = random_specification(rng)
+    counts = Dict(arr_name => rand(rng, 1:10) for (arr_name, _) in specification)
+    physical_state = ConstructState(specification, counts)
 
     # These represent our model of what was read or written.
     read = Set{PlaceType}()
@@ -93,23 +84,18 @@ end
 
     # Convert specification to dicts for easier work.
     dictspec = spec_to_dict(specification)
-
+    every_key = all_keys(specification, physical_state)
     initialize_physical!(specification, physical_state)
 
     for step_idx in 1:5
         activity = rand(rng, 1:2)
         if activity == 1
             empty!(written)
+            chosen_keys = rand(rng, every_key, rand(rng, 0:length(every_key)))
             writeres = capture_state_changes(physical_state) do
-                spots = rand(rng, 1:10)
-                for spot in 1:spots
-                    arr_name = rand(rng, keys(dictspec))
-                    arr = getproperty(physical_state, arr_name)
-                    elemidx = rand(rng, 1:length(arr))
-                    member = rand(rng, keys(dictspec[arr_name]))
-                    elemval = rand(rng, DefaultValues[dictspec[arr_name][member]])
-                    setproperty!(arr[elemidx], member, elemval)
-                    push!(written, (arr_name, elemidx, member))
+                for (key, key_type) in chosen_keys
+                    write_to_key(physical_state, key, rand(rng, DefaultValues[key_type]))
+                    push!(written, key)
                 end
                 nothing
             end
@@ -119,16 +105,11 @@ end
             end
         elseif activity == 2
             empty!(read)
+            chosen_keys = rand(rng, every_key, rand(rng, 0:length(every_key)))
             readres = capture_state_reads(physical_state) do
-                spots = rand(rng, 1:10)
-                for spot in 1:spots
-                    arr_name = rand(rng, keys(dictspec))
-                    arr = getproperty(physical_state, arr_name)
-                    elemidx = rand(rng, 1:length(arr))
-                    member = rand(rng, keys(dictspec[arr_name]))
-                    elemval = rand(rng, DefaultValues[dictspec[arr_name][member]])
-                    getproperty(arr[elemidx], member)
-                    push!(read, (arr_name, elemidx, member))
+                for (key, key_type) in chosen_keys
+                    read_from_key(physical_state, key)
+                    push!(read, key)
                 end
                 nothing
             end

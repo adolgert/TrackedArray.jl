@@ -1,4 +1,8 @@
-export PlaceType, DefaultValues, spec_to_dict, all_keys, initialize_physical!
+using Random
+using StatsBase
+
+export PlaceType, DefaultValues
+export spec_to_dict, all_keys, initialize_physical!, write_to_key, read_from_key, random_specification
 
 const PlaceType=Tuple{Symbol,Int,Symbol}
 const DefaultValues = Dict(
@@ -74,4 +78,77 @@ function initialize_physical!(specification, physical_state)
             component[elem_idx] = element_type(field_values...)
         end
     end
+end
+
+
+function write_to_key(physical_state, key::PlaceType, value)
+    arr_name, elemidx, member = key
+    arr = getproperty(physical_state, arr_name)
+    setproperty!(arr[elemidx], member, value)
+end
+
+
+function read_from_key(physical_state, key::PlaceType)
+    arr_name, elemidx, member = key
+    arr = getproperty(physical_state, arr_name)
+    return getproperty(arr[elemidx], member)
+end
+
+
+"""
+Creates a specification that looks like:
+```
+    specification = [
+        :people => [
+            :health => Symbol,
+            :age => Int,
+            :location => Int
+        ]
+        :places => [
+            :name => String,
+            :population => Int
+        ]
+    ]
+```
+"""
+function random_specification(rng; min_arrays=1, max_arrays=20, min_fields=1, max_fields=20)
+    available_types = [Symbol, Int, String, Float64]
+    field_name_options = [
+        :id, :name, :health, :age, :location, :status, :value, :count, :type,
+        :level, :state, :size, :weight, :score, :time, :rate, :flag, :category,
+        :priority, :color]
+    
+    num_arrays = rand(rng, min_arrays:max_arrays)
+    specification = []
+
+    for i in 1:num_arrays
+        # Generate unique array name
+        base_name = gensym("arr")
+        array_name = i == 1 ? base_name : Symbol(string(base_name) * string(i))
+        
+        # Generate fields for this array
+        num_fields = rand(rng, min_fields:max_fields)
+        fields = []
+        used_field_names = Set{Symbol}()
+        
+        field_names = sample(rng, field_name_options, num_fields; replace=false)
+        for j in 1:num_fields
+            # Pick a unique field name
+            field_name = field_names[j]
+            counter = 1
+            while field_name in used_field_names
+                field_name = Symbol(string(rand(rng, field_name_options)) * string(counter))
+                counter += 1
+            end
+            push!(used_field_names, field_name)
+            
+            # Pick a random type
+            field_type = rand(rng, available_types)
+            push!(fields, field_name => field_type)
+        end
+        
+        push!(specification, array_name => fields)
+    end
+    
+    return specification
 end
