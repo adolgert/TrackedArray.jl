@@ -3,6 +3,52 @@ using StatsBase
 
 export PlaceType, DefaultValues
 export spec_to_dict, all_keys, initialize_physical!, write_to_key, read_from_key, random_specification
+export write_n, PhysicalState, accept, resetread, changed, wasread
+export capture_state_changes, capture_state_reads
+
+
+# Define the interface to the lower level.
+"""
+The `PhysicalState` may contain other properties, but those defined with
+`TrackedVectors` are used to compute the next event in the simulation.
+"""
+abstract type PhysicalState end
+
+function accept end
+function resetread end
+function changed end
+function wasread end
+
+
+"""
+    capture_state_changes(f::Function, physical_state)
+
+The callback function `f` will modify the physical state. This function
+records which parts of the state were modified. The callback should have
+no arguments and may return a result.
+"""
+function capture_state_changes(f::Function, physical)
+    accept(physical)
+    result = f()
+    changes = changed(physical)
+    return (;result, changes)
+end
+
+
+"""
+    capture_state_reads(f::Function, physical_state)
+
+The callback function `f` will read the physical state. This function
+records which parts of the state were read. The callback should have
+no arguments and may return a result.
+"""
+function capture_state_reads(f::Function, physical)
+    resetread(physical)
+    result = f()
+    reads = wasread(physical)
+    return (;result, reads)
+end
+
 
 const PlaceType=Tuple{Symbol,Int,Symbol}
 const DefaultValues = Dict(
@@ -151,4 +197,18 @@ function random_specification(rng; min_arrays=1, max_arrays=20, min_fields=1, ma
     end
     
     return specification
+end
+
+
+function write_n(physical_state, every_key, n, rng)
+    written = Set{PlaceType}()
+    chosen_keys = rand(rng, every_key, n)
+    writeres = capture_state_changes(physical_state) do
+        for (key, key_type) in chosen_keys
+            write_to_key(physical_state, key, rand(rng, DefaultValues[key_type]))
+            push!(written, key)
+        end
+        nothing
+    end
+    return issetequal(writeres.changes, written)
 end

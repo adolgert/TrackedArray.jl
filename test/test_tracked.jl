@@ -71,7 +71,6 @@ end
     using Distributions
     using Random
     using TrackedArray.Original
-    using TrackedArray.Original: capture_state_changes, capture_state_reads
     rng = Xoshiro(9876234982)
 
     specification = random_specification(rng)
@@ -90,16 +89,7 @@ end
     for step_idx in 1:5
         activity = rand(rng, 1:2)
         if activity == 1
-            empty!(written)
-            chosen_keys = rand(rng, every_key, rand(rng, 0:length(every_key)))
-            writeres = capture_state_changes(physical_state) do
-                for (key, key_type) in chosen_keys
-                    write_to_key(physical_state, key, rand(rng, DefaultValues[key_type]))
-                    push!(written, key)
-                end
-                nothing
-            end
-            @test issetequal(writeres.changes, written)
+            @test write_n(physical_state, every_key, rand(rng, 0:length(every_key)), rng)
         elseif activity == 2
             empty!(read)
             chosen_keys = rand(rng, every_key, rand(rng, 0:length(every_key)))
