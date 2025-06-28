@@ -66,7 +66,6 @@ end
     end
 end
 
-const PlaceType=Tuple{Symbol,Int,Symbol}
 
 @testset "Consistency and correctness" begin
     using Distributions
@@ -93,39 +92,9 @@ const PlaceType=Tuple{Symbol,Int,Symbol}
     written = Set{PlaceType}()
 
     # Convert specification to dicts for easier work.
-    dictspec = Dict{Symbol,Dict{Symbol,DataType}}()
-    for component_idx in eachindex(specification)
-        component_name, fields = specification[component_idx]
-        for (field, field_type) in fields
-            if !haskey(dictspec, component_name)
-                dictspec[component_name] = Dict{Symbol,DataType}()
-            end
-            dictspec[component_name][field] = field_type
-        end
-    end
+    dictspec = spec_to_dict(specification)
 
-    # Default initialization
-    defval = Dict(
-        Symbol => [:none, :what, :infected, :dead, :moving, :staying],
-        Int => [1, 7, 3, 6, 9, 11],
-        String => ["hi", "Bob", "fl", "wy", "ar"],
-        Float64 => [1.0, 2.0, 3.14, 2.71828, 1.618]
-        )
-    for component_idx in eachindex(specification)
-        component_name, fields = specification[component_idx]
-        component = getfield(physical_state, component_name)
-        element_type = eltype(component)
-        for elem_idx in eachindex(component)
-            # Initialize element with zero values first
-            field_names = [field for (field, _) in fields]
-            field_values = [field_type == Symbol ? :none : 
-                           field_type == Int ? 0 : 
-                           field_type == String ? "" : 
-                           field_type == Float64 ? 0.0 : 
-                           zero(field_type) for (_, field_type) in fields]
-            component[elem_idx] = element_type(field_values...)
-        end
-    end
+    initialize_physical!(specification, physical_state)
 
     for step_idx in 1:5
         activity = rand(rng, 1:2)
@@ -138,7 +107,7 @@ const PlaceType=Tuple{Symbol,Int,Symbol}
                     arr = getproperty(physical_state, arr_name)
                     elemidx = rand(rng, 1:length(arr))
                     member = rand(rng, keys(dictspec[arr_name]))
-                    elemval = rand(rng, defval[dictspec[arr_name][member]])
+                    elemval = rand(rng, DefaultValues[dictspec[arr_name][member]])
                     setproperty!(arr[elemidx], member, elemval)
                     push!(written, (arr_name, elemidx, member))
                 end
@@ -157,7 +126,7 @@ const PlaceType=Tuple{Symbol,Int,Symbol}
                     arr = getproperty(physical_state, arr_name)
                     elemidx = rand(rng, 1:length(arr))
                     member = rand(rng, keys(dictspec[arr_name]))
-                    elemval = rand(rng, defval[dictspec[arr_name][member]])
+                    elemval = rand(rng, DefaultValues[dictspec[arr_name][member]])
                     getproperty(arr[elemidx], member)
                     push!(read, (arr_name, elemidx, member))
                 end
