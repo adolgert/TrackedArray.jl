@@ -121,7 +121,7 @@ function initialize_physical!(specification, physical_state)
                            field_type == String ? "" : 
                            field_type == Float64 ? 0.0 : 
                            zero(field_type) for (_, field_type) in fields]
-            component[elem_idx] = element_type(field_values...)
+            component[elem_idx] = Base.invokelatest(element_type, field_values...)
         end
     end
 end
