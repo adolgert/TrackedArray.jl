@@ -1,395 +1,329 @@
 """
-This module implements an immutable tracking system using bitfields and structural sharing
-for efficient memory usage and functional programming style.
+This module implements a "Registry" tracking system.
+- At construction, it builds a complete mapping from each trackable place
+  (array, index, field) to a unique integer index.
+- Read/write status for all places is stored in two large, pre-allocated
+  BitVectors.
+- Accessing an element's field flips the corresponding bit in the BitVector.
+- This design has a higher upfront cost at construction but aims for very
+  fast access tracking and state querying.
 """
 module Secondary
-import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
-import ..TrackedArray: PlaceType
+import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState, PlaceType
 
 export TrackedVector, ConstructState
+# For compatibility, export the vector-level functions, though they are no-ops.
 export gotten, changed, reset_tracking!, reset_gotten!
 
-# Compact representation of tracking state using bitfields
-# Bit 0: read, Bit 1: written
-const READ_BIT = UInt8(1)
-const WRITE_BIT = UInt8(2)
-
-"""
-    TrackingState
-
-Immutable structure holding tracking information for a single array.
-Uses a Dict for sparse storage of tracking bits.
-"""
-struct TrackingState
-    bits::Dict{Tuple{Int,Symbol}, UInt8}  # (index, field) => read/write bits
-    
-    TrackingState() = new(Dict{Tuple{Int,Symbol}, UInt8}())
-    TrackingState(bits::Dict) = new(bits)
-end
-
-# Functional operations on TrackingState
-function mark_read(state::TrackingState, index::Int, field::Symbol)
-    new_bits = copy(state.bits)
-    key = (index, field)
-    new_bits[key] = get(new_bits, key, UInt8(0)) | READ_BIT
-    return TrackingState(new_bits)
-end
-
-function mark_write(state::TrackingState, index::Int, field::Symbol)
-    new_bits = copy(state.bits)
-    key = (index, field)
-    new_bits[key] = get(new_bits, key, UInt8(0)) | WRITE_BIT
-    return TrackingState(new_bits)
-end
-
-function get_reads(state::TrackingState)
-    result = Set{Tuple{Int,Symbol}}()
-    for ((idx, field), bits) in state.bits
-        if bits & READ_BIT != 0
-            push!(result, (idx, field))
-        end
-    end
-    return result
-end
-
-function get_writes(state::TrackingState)
-    result = Set{Tuple{Int,Symbol}}()
-    for ((idx, field), bits) in state.bits
-        if bits & WRITE_BIT != 0
-            push!(result, (idx, field))
-        end
-    end
-    return result
-end
-
-function clear_all(state::TrackingState)
-    return TrackingState()
-end
-
-function clear_reads(state::TrackingState)
-    new_bits = Dict{Tuple{Int,Symbol}, UInt8}()
-    for (key, bits) in state.bits
-        new_val = bits & ~READ_BIT
-        if new_val != 0
-            new_bits[key] = new_val
-        end
-    end
-    return TrackingState(new_bits)
-end
-
-"""
-    TrackedElement{T}
-
-Wrapper for array elements that intercepts property access.
-Immutable except for the physical reference fields.
-"""
-mutable struct TrackedElement{T}
-    const value::T
-    const array_ref::Ref{Any}  # Reference to containing array
-    const index::Int
-end
-
-function Base.getproperty(elem::TrackedElement, field::Symbol)
-    if field === :value || field === :array_ref || field === :index
-        return getfield(elem, field)
-    else
-        # Notify array of read access
-        arr = elem.array_ref[]
-        if arr !== nothing
-            notify_element_read(arr, elem.index, field)
-        end
-        return getproperty(elem.value, field)
-    end
-end
-
-function Base.setproperty!(elem::TrackedElement, field::Symbol, val)
-    if field === :value || field === :array_ref || field === :index
-        error("Cannot modify immutable fields of TrackedElement")
-    else
-        # Notify array of write access
-        arr = elem.array_ref[]
-        if arr !== nothing
-            notify_element_write(arr, elem.index, field)
-        end
-        setproperty!(elem.value, field, val)
-    end
-end
-
-Base.:(==)(a::TrackedElement, b::TrackedElement) = a.value == b.value
+# Forward declarations for notification methods
+function notify_read end
+function notify_write end
 
 """
     SecondaryVector{T}
 
-Immutable tracked vector that maintains tracking state functionally.
+A vector that notifies a central state when its elements are accessed.
+It holds a reference to the parent state and its own array name.
 """
 mutable struct SecondaryVector{T} <: AbstractVector{T}
-    const data::Vector{TrackedElement{T}}
+    data::Vector{T}
     array_name::Symbol
-    tracking::TrackingState
-    physical_state::Any  # Mutable reference to physical state
-    
+    physical_state::Any # Will be set to the actual physical state
+
     function SecondaryVector{T}(::UndefInitializer, n::Integer) where T
-        elements = Vector{TrackedElement{T}}(undef, n)
-        arr_ref = Ref{Any}(nothing)
-        for i in 1:n
-            elements[i] = TrackedElement{T}(Base.invokelatest(T, undef), arr_ref, i)
-        end
-        vec = new{T}(elements, :unknown, TrackingState(), nothing)
-        # Set the array reference for all elements
-        for elem in elements
-            elem.array_ref[] = vec
-        end
-        return vec
-    end
-    
-    function SecondaryVector{T}(::UndefInitializer, n::Integer, name::Symbol) where T
-        elements = Vector{TrackedElement{T}}(undef, n)
-        arr_ref = Ref{Any}(nothing)
-        for i in 1:n
-            elements[i] = TrackedElement{T}(Base.invokelatest(T, undef), arr_ref, i)
-        end
-        vec = new{T}(elements, name, TrackingState(), nothing)
-        # Set the array reference for all elements
-        for elem in elements
-            elem.array_ref[] = vec
-        end
-        return vec
+        new{T}(Vector{T}(undef, n), :unknown, nothing)
     end
 end
 
-# AbstractArray interface
+# --- AbstractArray Interface ---
 Base.size(v::SecondaryVector) = size(v.data)
 
 function Base.getindex(v::SecondaryVector{T}, i::Integer) where T
-    return v.data[i].value
+    element = v.data[i]
+    # Lazily set the back-references on the element when it's first accessed.
+    # This is crucial for the element to know how to notify its container.
+    if hasfield(typeof(element), :_container)
+        setfield!(element, :_container, v)
+        setfield!(element, :_index, i)
+    end
+    return element
 end
 
 function Base.setindex!(v::SecondaryVector{T}, x, i::Integer) where T
-    # Create new element wrapper
-    v.data[i] = TrackedElement{T}(x, Ref{Any}(v), i)
+    v.data[i] = x
+    # Also set back-references on the new element being placed in the vector.
+    if hasfield(typeof(x), :_container)
+        setfield!(x, :_container, v)
+        setfield!(x, :_index, i)
+    end
     return x
 end
 
-# Notification handlers
+# --- Notification Forwarding ---
+# The vector's role is to forward notifications from its elements up to the
+# central physical state, adding its own `array_name` to the information.
 function notify_element_read(v::SecondaryVector, index::Int, field::Symbol)
-    # Update tracking state immutably
-    v.tracking = mark_read(v.tracking, index, field)
-    
-    # Notify physical state if connected
     if v.physical_state !== nothing
         notify_read(v.physical_state, v.array_name, index, field)
     end
 end
 
 function notify_element_write(v::SecondaryVector, index::Int, field::Symbol)
-    # Update tracking state immutably
-    v.tracking = mark_write(v.tracking, index, field)
-    
-    # Notify physical state if connected
     if v.physical_state !== nothing
         notify_write(v.physical_state, v.array_name, index, field)
     end
 end
 
-# Tracking interface
-function gotten(v::SecondaryVector)
-    return get_reads(v.tracking)
-end
+# --- Compatibility Stubs ---
+# In this "push" model, tracking is centralized in the state object, not the
+# vector. These functions are no-ops for API compatibility.
+gotten(v::SecondaryVector) = Set{Tuple}()
+changed(v::SecondaryVector) = Set{Tuple}()
+reset_tracking!(v::SecondaryVector) = v
+reset_gotten!(v::SecondaryVector) = v
 
-function changed(v::SecondaryVector)
-    return get_writes(v.tracking)
-end
-
-function reset_tracking!(v::SecondaryVector)
-    v.tracking = clear_all(v.tracking)
-    return v
-end
-
-function reset_gotten!(v::SecondaryVector)
-    v.tracking = clear_reads(v.tracking)
-    return v
-end
-
-# Property access
-function Base.getproperty(v::SecondaryVector, field::Symbol)
-    if field in (:data, :array_name, :tracking, :physical_state)
-        return getfield(v, field)
-    else
-        error("Field $field not found in SecondaryVector")
-    end
-end
-
-function Base.setproperty!(v::SecondaryVector, field::Symbol, value)
-    if field === :tracking || field === :physical_state
-        setfield!(v, field, value)
-    elseif field === :array_name
-        setfield!(v, field, value)
-    else
-        error("Cannot set field $field in SecondaryVector")
-    end
-end
-
-# Alias for compatibility
+# Alias for compatibility with benchmark code
 const TrackedVector = SecondaryVector
-
-"""
-    SecondaryState
-
-Physical state with centralized tracking using immutable data structures.
-"""
-abstract type SecondaryState <: PhysicalState end
-
-# These will be implemented by the generated state types
-function notify_read end
-function notify_write end
 
 """
     create_element_type(name, fields)
 
-Creates a simple mutable struct type for array elements.
+Dynamically creates a mutable struct definition for array elements.
+The generated struct will have the specified data fields plus internal fields
+`_container` and `_index` for notifications. It also overloads `getproperty`
+and `setproperty!` to trigger the notification mechanism.
 """
 function create_element_type(type_name::Symbol, fields::Vector)
     field_defs = [Expr(:(::), fname, ftype) for (fname, ftype) in fields]
     field_names = [f[1] for f in fields]
-    
+
     struct_def = quote
         mutable struct $type_name
             $(field_defs...)
-            
-            # Constructor for normal initialization
+            _container::Union{Nothing, SecondaryVector}
+            _index::Union{Nothing, Int}
+
+            # Constructor for full initialization
             function $type_name($([fname for fname in field_names]...))
-                new($([fname for fname in field_names]...))
+                new($([fname for fname in field_names]...), nothing, nothing)
             end
-            
-            # Constructor for undef initialization
+            # Constructor for `undef` initialization
             function $type_name(::UndefInitializer)
                 new()
             end
         end
     end
-    
-    # Create a simple equality operator
+
+    # Overload getproperty to notify on read
+    getprop_def = quote
+        function Base.getproperty(obj::$type_name, field::Symbol)
+            if field in (:_container, :_index)
+                return getfield(obj, field)
+            else
+                container = getfield(obj, :_container)
+                if container !== nothing
+                    notify_element_read(container, getfield(obj, :_index), field)
+                end
+                return getfield(obj, field)
+            end
+        end
+    end
+
+    # Overload setproperty! to notify on write
+    setprop_def = quote
+        function Base.setproperty!(obj::$type_name, field::Symbol, value)
+            if field in (:_container, :_index)
+                setfield!(obj, field, value)
+            else
+                container = getfield(obj, :_container)
+                if container !== nothing
+                    notify_element_write(container, getfield(obj, :_index), field)
+                end
+                setfield!(obj, field, value)
+            end
+        end
+    end
+
+    # Hide internal fields from `propertynames`
+    propnames_def = quote
+        function Base.propertynames(obj::$type_name, private::Bool=false)
+            private ? fieldnames($type_name) : tuple($(map(QuoteNode, field_names)...))
+        end
+    end
+
+    # Equality should only compare data fields
     eq_comparisons = [:(a.$fname == b.$fname) for fname in field_names]
-    eq_expr = length(eq_comparisons) > 0 ? Expr(:&&, eq_comparisons...) : true
-    
+    eq_expr = !isempty(eq_comparisons) ? Expr(:&&, eq_comparisons...) : true
     eq_def = quote
         Base.:(==)(a::$type_name, b::$type_name) = $eq_expr
     end
-    
-    eval(struct_def)
-    eval(eq_def)
-    
-    return eval(type_name)
+
+    # Evaluate all definitions in the module's scope
+    @eval begin
+        $struct_def
+        $getprop_def
+        $setprop_def
+        $propnames_def
+        $eq_def
+    end
+
+    return @eval($type_name)
 end
+
+
+"""
+    SecondaryState
+
+An abstract type for the physical state in the Registry model.
+"""
+abstract type SecondaryState <: PhysicalState end
 
 """
     ConstructState(specification, counts)
 
-Creates a SecondaryState with tracked arrays.
+Creates a `PhysicalState` instance using the Registry (Bit-Array) model.
+This involves dynamically generating a concrete state type and its associated
+element types, and pre-calculating the mapping from places to bit indices.
 """
 function ConstructState(specification, counts)
-    # Create arrays
-    arrays = []
-    field_names = Symbol[]
-    field_types = []
+    # --- 1. Build the Place-to-Integer Mappings ---
+    total_places = sum(length(field_specs) * counts[arr_name] for (arr_name, field_specs) in specification)
+    forward_map = Dict{PlaceType, Int}()
+    reverse_map = Vector{PlaceType}(undef, total_places)
+    sizehint!(forward_map, total_places)
     
+    place_idx = 1
     for (array_name, field_specs) in specification
-        # Create element type
-        type_name = gensym(string(array_name) * "_type")
-        element_type = create_element_type(type_name, field_specs)
-        
-        # Create tracked vector
-        count = counts[array_name]
-        vec = SecondaryVector{element_type}(undef, count, array_name)
-        
-        push!(arrays, vec)
-        push!(field_names, array_name)
-        push!(field_types, SecondaryVector{element_type})
+        num_elements = counts[array_name]
+        for (field_name, _) in field_specs
+            for i in 1:num_elements
+                key = (array_name, i, field_name)
+                forward_map[key] = place_idx
+                reverse_map[place_idx] = key
+                place_idx += 1
+            end
+        end
     end
-    
-    # Create a custom state type
+
+    # --- 2. Generate Types and Create Vectors ---
+    vectors = []
+    state_field_names = Symbol[]
+    state_field_types = []
+
+    for (array_name, field_specs) in specification
+        # Dynamically create the struct type for the elements of this array
+        element_type_name = gensym(string(array_name) * "_type")
+        element_type = create_element_type(element_type_name, field_specs)
+
+        # Create the vector for this array
+        count = counts[array_name]
+        vec = SecondaryVector{element_type}(undef, count)
+        vec.array_name = array_name
+
+        push!(vectors, vec)
+        push!(state_field_names, array_name)
+        push!(state_field_types, typeof(vec))
+    end
+
+    # --- 3. Dynamically Generate the State Struct and its Methods ---
     state_type_name = gensym("SecondaryState")
-    field_defs = [Expr(:(::), fname, ftype) for (fname, ftype) in zip(field_names, field_types)]
-    
+    state_field_defs = [Expr(:(::), name, type) for (name, type) in zip(state_field_names, state_field_types)]
+
+    # The state struct holds the arrays and the tracking machinery
     state_def = quote
         mutable struct $state_type_name <: SecondaryState
-            $(field_defs...)
-            _reads::Set{PlaceType}
-            _writes::Set{PlaceType}
-            
-            function $state_type_name($(field_names...))
-                new($(field_names...), Set{PlaceType}(), Set{PlaceType}())
+            $(state_field_defs...)
+            const _forward_map::Dict{PlaceType, Int}
+            const _reverse_map::Vector{PlaceType}
+            _reads::BitVector
+            _writes::BitVector
+
+            function $state_type_name($(state_field_names...), fwd_map, rev_map, reads, writes)
+                new($(state_field_names...), fwd_map, rev_map, reads, writes)
             end
         end
     end
-    
-    # Create property access methods
-    getprop_def = quote
-        function Base.getproperty(s::$state_type_name, field::Symbol)
-            if field === :_reads || field === :_writes
-                return getfield(s, field)
-            else
-                return getfield(s, field)
-            end
-        end
-    end
-    
-    # Create notification methods for this specific type
+
+    # Notification methods that operate on this specific state type
     notify_read_def = quote
         function notify_read(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
-            push!(getfield(state, :_reads), (array_name, index, field))
+            bit_idx = get(state._forward_map, (array_name, index, field), 0)
+            if bit_idx > 0
+                state._reads[bit_idx] = true
+            end
         end
     end
-    
+
     notify_write_def = quote
         function notify_write(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
-            push!(getfield(state, :_writes), (array_name, index, field))
+            bit_idx = get(state._forward_map, (array_name, index, field), 0)
+            if bit_idx > 0
+                state._writes[bit_idx] = true
+            end
         end
     end
-    
-    # Create interface methods
+
+    # Interface methods
     changed_def = quote
-        changed(state::$state_type_name) = getfield(state, :_writes)
+        function changed(state::$state_type_name)
+            # findall is efficient on BitVectors
+            indices = findall(state._writes)
+            # Use the pre-computed reverse map to build the result set
+            return Set(state._reverse_map[i] for i in indices)
+        end
     end
-    
+
     wasread_def = quote
-        wasread(state::$state_type_name) = getfield(state, :_reads)
+        function wasread(state::$state_type_name)
+            indices = findall(state._reads)
+            return Set(state._reverse_map[i] for i in indices)
+        end
     end
-    
+
     accept_def = quote
         function accept(state::$state_type_name)
-            empty!(getfield(state, :_reads))
-            empty!(getfield(state, :_writes))
+            # fill! is a very fast operation on BitVectors
+            fill!(state._reads, false)
+            fill!(state._writes, false)
             return state
         end
     end
-    
+
     resetread_def = quote
         function resetread(state::$state_type_name)
-            empty!(getfield(state, :_reads))
+            fill!(state._reads, false)
             return state
         end
     end
-    
-    # Evaluate all definitions
-    eval(state_def)
-    eval(getprop_def)
-    eval(notify_read_def)
-    eval(notify_write_def)
-    eval(changed_def)
-    eval(wasread_def)
-    eval(accept_def)
-    eval(resetread_def)
-    
-    # Create state instance
-    state = Base.invokelatest(eval(state_type_name), arrays...)
-    
-    # Connect arrays to state
-    for (i, vec) in enumerate(arrays)
-        vec.physical_state = state
+
+    # Evaluate all the generated definitions
+    @eval begin
+        $state_def
+        $notify_read_def
+        $notify_write_def
+        $changed_def
+        $wasread_def
+        $accept_def
+        $resetread_def
     end
     
-    return state
+    # --- 4. Instantiate and Connect Everything ---
+    state_type = @eval($state_type_name)
+    
+    # Prepare arguments for the state constructor
+    read_bits = falses(total_places)
+    write_bits = falses(total_places)
+    constructor_args = (vectors..., forward_map, reverse_map, read_bits, write_bits)
+    
+    # Use invokelatest for type stability with dynamically generated types
+    physical_state = Base.invokelatest(state_type, constructor_args...)
+
+    # Set the back-reference from each vector to the state object
+    for vec in vectors
+        vec.physical_state = physical_state
+    end
+
+    return physical_state
 end
 
-end
+end # module Secondary
