@@ -34,3 +34,34 @@ Base.zero(::Type{Person}) = Person(:neutral, 0, 0)
     reset_tracking!(person)
     @test isempty(changed(person))
 end
+
+
+@testset "Construction from minimal specification" begin
+    using TrackedArray.Original
+
+    specification = [
+        :people => [
+            :health => Symbol,
+            :age => Int,
+            :location => Int
+        ]
+        :places => [
+            :name => String,
+            :population => Int
+        ]
+    ]
+    physical_state = ConstructState(specification, Dict(:people => 3, :places => 2))
+    @assert !(physical_state isa Type)
+
+    # Test structural properties.
+    for component_idx in eachindex(specification)
+        component, fields = specification[component_idx]
+        @test hasfield(typeof(physical_state), component)
+        member_type = eltype(getfield(physical_state, component))
+        @test ismutabletype(member_type)
+        for (field, field_type) in fields
+            @test hasfield(member_type, field)
+            @test fieldtype(member_type, field) == field_type
+        end
+    end
+end
