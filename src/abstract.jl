@@ -3,7 +3,7 @@ using StatsBase
 
 export PlaceType, DefaultValues
 export spec_to_dict, all_keys, initialize_physical!, write_to_key, read_from_key, random_specification
-export write_n, PhysicalState, accept, resetread, changed, wasread
+export write_n, read_n, PhysicalState, accept, resetread, changed, wasread
 export capture_state_changes, capture_state_reads
 
 
@@ -211,4 +211,18 @@ function write_n(physical_state, every_key, n, rng)
         nothing
     end
     return issetequal(writeres.changes, written)
+end
+
+
+function read_n(physical_state, every_key, n, rng)
+    read = Set{PlaceType}()
+    chosen_keys = rand(rng, every_key, n)
+    readres = capture_state_reads(physical_state) do
+        for (key, key_type) in chosen_keys
+            read_from_key(physical_state, key)
+            push!(read, key)
+        end
+        nothing
+    end
+    return issetequal(readres.reads, read)
 end

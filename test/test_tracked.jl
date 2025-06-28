@@ -91,16 +91,7 @@ end
         if activity == 1
             @test write_n(physical_state, every_key, rand(rng, 0:length(every_key)), rng)
         elseif activity == 2
-            empty!(read)
-            chosen_keys = rand(rng, every_key, rand(rng, 0:length(every_key)))
-            readres = capture_state_reads(physical_state) do
-                for (key, key_type) in chosen_keys
-                    read_from_key(physical_state, key)
-                    push!(read, key)
-                end
-                nothing
-            end
-            @test issetequal(readres.reads, read)
+            @test read_n(physical, every_key, rand(rng, 0:length(every_key)), rng)
         end
     end
 end
