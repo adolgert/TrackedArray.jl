@@ -1,6 +1,7 @@
 using ReTest
 using TrackedArray
 using Base
+using Logging
 
 
 TrackedArray.Original.@tracked_struct Person begin
@@ -86,12 +87,25 @@ end
     every_key = all_keys(specification, physical_state)
     initialize_physical!(specification, physical_state)
 
-    for step_idx in 1:5
-        activity = rand(rng, 1:2)
-        if activity == 1
-            @test write_n(physical_state, every_key, rand(rng, 0:length(every_key)), rng)
-        elseif activity == 2
-            @test read_n(physical_state, every_key, rand(rng, 0:length(every_key)), rng)
+    logger = ConsoleLogger(stderr, Logging.Info)
+    with_logger(logger) do
+        @info "Starting test loop with $(length(every_key)) available keys"
+        for step_idx in 1:5
+            activity = rand(rng, 1:2)
+            if activity == 1
+                n_keys = rand(rng, 0:length(every_key))
+                @info "Step $step_idx: Testing write operation with $n_keys keys"
+                result = write_n(physical_state, every_key, n_keys, rng)
+                @info "Step $step_idx: Write test result: $result"
+                @test result
+            elseif activity == 2
+                n_keys = rand(rng, 0:length(every_key))
+                @info "Step $step_idx: Testing read operation with $n_keys keys"
+                result = read_n(physical_state, every_key, n_keys, rng)
+                @info "Step $step_idx: Read test result: $result"
+                @test result
+            end
         end
+        @info "Completed test loop successfully"
     end
 end

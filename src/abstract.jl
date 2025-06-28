@@ -1,4 +1,5 @@
 using Random
+using Logging
 using StatsBase
 
 export PlaceType, DefaultValues
@@ -210,7 +211,11 @@ function write_n(physical_state, every_key, n, rng)
         end
         nothing
     end
-    return issetequal(writeres.changes, written)
+    allgood = issetequal(writeres.changes, written)
+    if !allgood
+        @debug "Sets mismatch. have $(writeres.changes) want: $written"
+    end
+    return allgood
 end
 
 
@@ -224,5 +229,9 @@ function read_n(physical_state, every_key, n, rng)
         end
         nothing
     end
-    return issetequal(readres.reads, read)
+    allgood = issetequal(readres.reads, read)
+    if !allgood
+        @debug "Sets mismatch. have $(readres.reads) want: $read"
+    end
+    return allgood
 end
