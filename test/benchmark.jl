@@ -48,10 +48,42 @@ end
 
 
 function single_benchmark(SUT::Module, specs, rng)
-    all_benches = [random_writes, all_writes, random_reads, all_reads]
-    for spec_size in [:small, :large], benchmark in all_benches
-        # benchmark here.
-        # print benchmark result.
+    all_benches = [
+        ("random_writes", random_writes),
+        ("all_writes", all_writes), 
+        ("random_reads", random_reads),
+        ("all_reads", all_reads)
+    ]
+    
+    println("\n=== Benchmarking $(SUT) ===")
+    
+    for spec_size in [:small, :large]
+        specification = specs[spec_size]
+        
+        # Create physical state for this specification
+        counts = Dict(arr_name => rand(rng, 5:15) for (arr_name, _) in specification)
+        physical_state = SUT.ConstructState(specification, counts)
+        every_key = all_keys(specification, physical_state)
+        initialize_physical!(specification, physical_state)
+        
+        println("\n--- Spec size: $spec_size ($(length(every_key)) keys) ---")
+        
+        for (bench_name, bench_func) in all_benches
+            # Set up benchmark with interpolated variables
+            result = @benchmark $bench_func($every_key, $physical_state, 12345) samples=5 seconds=2
+            
+            # Extract key metrics
+            min_time = minimum(result).time / 1e6  # Convert to milliseconds
+            median_time = median(result).time / 1e6
+            max_time = maximum(result).time / 1e6
+            allocations = median(result).allocs
+            memory = median(result).memory
+            
+            # Print formatted results
+            println("  $bench_name:")
+            println("    Time: $(round(min_time, digits=2))ms - $(round(median_time, digits=2))ms - $(round(max_time, digits=2))ms (min-median-max)")
+            println("    Memory: $(Base.format_bytes(memory)) ($(allocations) allocs)")
+        end
     end
 end
 
