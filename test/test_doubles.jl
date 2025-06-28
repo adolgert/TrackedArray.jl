@@ -4,8 +4,8 @@ using Base
 using Logging
 
 
-@testset "Construction from minimal specification" begin
-    using TrackedArray.Original
+@testset "Doubles: Construction from minimal specification" begin
+    using TrackedArray.Doubles
 
     specification = [
         :people => [
@@ -18,7 +18,7 @@ using Logging
             :population => Int
         ]
     ]
-    physical_state = TrackedArray.Original.ConstructState(specification, Dict(:people => 3, :places => 2))
+    physical_state = TrackedArray.Doubles.ConstructState(specification, Dict(:people => 3, :places => 2))
     @assert !(physical_state isa Type)
 
     # Test structural properties.
@@ -35,15 +35,15 @@ using Logging
 end
 
 
-@testset "Original Consistency and correctness" begin
+@testset "Doubles: Consistency and correctness" begin
     using Distributions
     using Random
-    using TrackedArray.Original
+    using TrackedArray.Doubles
     rng = Xoshiro(9876234982)
 
     specification = random_specification(rng)
     counts = Dict(arr_name => rand(rng, 1:10) for (arr_name, _) in specification)
-    physical_state = TrackedArray.Original.ConstructState(specification, counts)
+    physical_state = TrackedArray.Doubles.ConstructState(specification, counts)
 
     # These represent our model of what was read or written.
     read = Set{PlaceType}()
