@@ -43,7 +43,7 @@ end
 
 function make_specifications(rng)
     specs = Dict()
-    specs[:small] = random_specification(
+    specs[:small] = random_specification(e
         rng; min_arrays=3, max_arrays=3, min_fields=5, max_fields=5)
     specs[:large] = random_specification(
         rng; min_arrays=10, max_arrays=10, min_fields=10, max_fields=10)
