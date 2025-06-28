@@ -5,6 +5,7 @@ version = "1.0.0-DEV"
 
 [deps]
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 MacroTools = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
@@ -14,6 +15,7 @@ StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
 ArgParse = "1.2.0"
+BenchmarkTools = "1.6.0"
 Distributions = "0.25.120"
 Logging = "1.11.0"
 MacroTools = "0.5.16"
