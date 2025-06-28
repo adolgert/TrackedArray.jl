@@ -7,4 +7,6 @@ include("abstract.jl")
 include("tracked.jl")
 include("observed.jl")
 include("doubles.jl")
+include("dealer.jl")
+include("secondary.jl")
 end

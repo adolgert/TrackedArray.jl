@@ -29,9 +29,9 @@ records which parts of the state were modified. The callback should have
 no arguments and may return a result.
 """
 function capture_state_changes(f::Function, physical)
-    accept(physical)
+    Base.invokelatest(accept, physical)
     result = f()
-    changes = changed(physical)
+    changes = Base.invokelatest(changed, physical)
     return (;result, changes)
 end
 

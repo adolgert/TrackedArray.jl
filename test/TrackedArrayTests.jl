@@ -9,6 +9,8 @@ continuous_integration() = get(ENV, "CI", "false") == "true"
 include("test_tracked.jl")
 include("test_observed.jl")
 include("test_doubles.jl")
+include("test_dealer.jl")
+include("test_secondary.jl")
 
 retest(args...; kwargs...) = ReTest.retest(args...; kwargs...)
 
