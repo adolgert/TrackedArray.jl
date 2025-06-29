@@ -81,7 +81,7 @@ end
 """
     ConstructState(specification, counts)
 
-Creates a PhysicalState with TrackedVector arrays populated with tracked structs
+Creates a PhysicalState with CuddleVector arrays populated with Cuddle-wrapped structs
 based on the specification.
 
 # Arguments
@@ -95,14 +95,17 @@ state = ConstructState(spec, Dict(:people => 3))
 ```
 """
 function ConstructState(specification, counts)
-    # Generate struct types and create TrackedVectors
+    # Create the tracker that will be shared by all elements
+    tracker = Tracker{PlaceKey}()
+    
+    # Generate struct types and create CuddleVectors
     fields = []
     
     for (array_name, field_specs) in specification
-        # Create the tracked struct type dynamically
+        # Create the basic struct type dynamically
         struct_name = Symbol(string(array_name) * "_type")
         
-        # Build field expressions for the macro
+        # Build field expressions
         field_exprs = []
         for (field_name, field_type) in field_specs
             push!(field_exprs, :($field_name::$field_type))
@@ -110,7 +113,7 @@ function ConstructState(specification, counts)
         
         # Create the struct using eval
         struct_def = quote
-            @tracked_struct $struct_name begin
+            mutable struct $struct_name
                 $(field_exprs...)
             end
         end
@@ -118,21 +121,47 @@ function ConstructState(specification, counts)
         
         # Get the count for this array
         count = counts[array_name]
+        DataType = eval(struct_name)
         
-        # Create TrackedVector with uninitialized tracked structs
-        tracked_vec = TrackedVector{eval(struct_name)}(undef, count)
+        # Create CuddleVector with Cuddle-wrapped elements
+        CuddleType = Cuddle{DataType, Tuple{Symbol,Int}, PlaceKey}
+        vec = CuddleVector{CuddleType}(undef, count)
         
-        push!(fields, array_name => tracked_vec)
+        # Initialize each element with a Cuddle wrapper
+        for i in 1:count
+            # Build constructor arguments with default values
+            args = []
+            for (field_name, field_type) in field_specs
+                if field_type == Int
+                    push!(args, 0)
+                elseif field_type == Symbol
+                    push!(args, :none)
+                elseif field_type == String
+                    push!(args, "")
+                elseif field_type == Float64
+                    push!(args, 0.0)
+                else
+                    # Try to construct a default value
+                    push!(args, field_type())
+                end
+            end
+            data = Base.invokelatest(DataType, args...)
+            path = (array_name, i)
+            vec[i] = Cuddle(data, path, tracker)
+        end
+        
+        push!(fields, array_name => vec)
     end
     
-    # Create anonymous TrackedState struct
-    state_type_name = gensym("TrackedState")
+    # Create anonymous CuddleState struct
+    state_type_name = gensym("CuddleState")
     field_names = [pair[1] for pair in fields]
-    field_types = [:(TrackedVector{$(Symbol(string(name) * "_type"))}) for name in field_names]
+    field_types = [:(CuddleVector{Cuddle{$(Symbol(string(name) * "_type")), Tuple{Symbol,Int}, PlaceKey}}) for name in field_names]
     
-    # Create the TrackedState type
+    # Create the CuddleState type
     state_def = quote
-        struct $state_type_name <: TrackedState
+        mutable struct $state_type_name <: CuddleState
+            _tracker::Tracker{PlaceKey}
             $([:($name::$typ) for (name, typ) in zip(field_names, field_types)]...)
         end
     end
@@ -140,7 +169,59 @@ function ConstructState(specification, counts)
     
     # Create and return instance
     field_values = [pair[2] for pair in fields]
-    return Base.invokelatest(eval(state_type_name), field_values...)
+    return Base.invokelatest(eval(state_type_name), tracker, field_values...)
+end
+
+# Type aliases for the tracker
+const PlaceType = Tuple{Symbol,Int,Symbol}
+const PlaceKey = Union{PlaceType,Tuple}
+
+# CuddleVector implementation
+struct CuddleVector{T} <: AbstractVector{T}
+    data::Vector{T}
+    CuddleVector{T}(::UndefInitializer, n::Int) where T = new(Vector{T}(undef, n))
+end
+
+Base.size(cv::CuddleVector) = size(cv.data)
+Base.getindex(cv::CuddleVector, i::Int) = cv.data[i]
+Base.setindex!(cv::CuddleVector, v, i::Int) = (cv.data[i] = v)
+Base.IndexStyle(::Type{<:CuddleVector}) = IndexLinear()
+
+# getitem for interface compatibility
+getitem(cv::CuddleVector, i::Int) = cv.data[i]
+
+# CuddleState implementation
+abstract type CuddleState <: PhysicalState end
+
+function accept(state::CuddleState)
+    empty!(state._tracker.read)
+    empty!(state._tracker.write)
+end
+
+function changed(state::CuddleState)
+    # Convert to Set of PlaceType, filtering out non-PlaceType entries
+    result = Set{PlaceType}()
+    for item in state._tracker.write
+        if item isa PlaceType
+            push!(result, item)
+        end
+    end
+    return result
+end
+
+function resetread(state::CuddleState)
+    empty!(state._tracker.read)
+end
+
+function wasread(state::CuddleState)
+    # Convert to Set of PlaceType, filtering out non-PlaceType entries
+    result = Set{PlaceType}()
+    for item in state._tracker.read
+        if item isa PlaceType
+            push!(result, item)
+        end
+    end
+    return result
 end
 
 end
