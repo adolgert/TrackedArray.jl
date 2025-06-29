@@ -2,7 +2,7 @@ module Shared
 import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
 import Base
 export ConstructState
-export Tracker, TrackedStruct, hascrumb, Crumb, Cuddle, cuddle_array
+export Tracker, TrackedStruct, hascrumb, Cuddle, cuddle_array
 
 """
 There will be exactly one Tracker per physical state, and every struct that
@@ -16,39 +16,30 @@ end
 
 
 """
-A crumb has a path to the object that owns the crumb, where a path is a tuple
-of symbols and integers. The tracker type may correspond exactly to that path plus
-another symbol, or it may be an abstract class, which is a Tuple.
-"""
-struct Crumb{P <: Tuple,T}
-    path::P
-    track::Tracker{T}
-end
-
-"""
 Use encapsulation to track reads/writes to a type.
+
+A path is a tuple of symbols and integers that identifies the location
+of the object. The tracker type may correspond exactly to that path plus
+another symbol, or it may be an abstract class, which is a Tuple.
 
 This will break type dispatch on the contained type.
 """
-struct Cuddle{D,P,T}
+struct Cuddle{D,P<:Tuple,T}
     _data::D
-    _crumb::Crumb{P,T}
-    Cuddle{D,P,T}(data::D, crumb) where {D,P,T} = new(data, crumb)
+    _path::P
+    _track::Tracker{T}
+    Cuddle{D,P,T}(data::D, path::P, track::Tracker{T}) where {D,P,T} = new(data, path, track)
 end
 
-# Convenience constructors
+# Convenience constructor that infers types
 Cuddle(data::D, path::P, tracker::Tracker{T}) where {D,P,T} = 
-    Cuddle{D,P,T}(data, Crumb(path, tracker))
-
-# Constructor that infers types from crumb
-Cuddle(data::D, crumb::Crumb{P,T}) where {D,P,T} = 
-    Cuddle{D,P,T}(data, crumb)
+    Cuddle{D,P,T}(data, path, tracker)
 
 # Helper function to create Cuddle with automatic path construction
 function cuddle(data::D, parent_path::Tuple, index, tracker::Tracker{T}) where {D,T}
     path = (parent_path..., index)
     P = typeof(path)
-    Cuddle{D,P,T}(data, Crumb(path, tracker))
+    Cuddle{D,P,T}(data, path, tracker)
 end
 
 # Create an array of Cuddles with automatic path generation
@@ -65,22 +56,26 @@ function cuddle_array(::Type{D}, dims::Dims, base_path::Symbol, tracker::Tracker
 end
 
 function Base.getproperty(obj::Cuddle, field::Symbol)
-    if field === :_crumb || field === :_data
+    if field === :_path || field === :_track || field === :_data
         return getfield(obj, field)
     end
-    crumb = getfield(obj, :_crumb)
-    push!(crumb.track.read, (crumb.path..., field))
-    return getfield(obj._data, field)
+    path = getfield(obj, :_path)
+    track = getfield(obj, :_track)
+    push!(track.read, (path..., field))
+    data = getfield(obj, :_data)
+    return getfield(data, field)
 end
 
 function Base.setproperty!(obj::Cuddle, field::Symbol, value)
-    if field === :_crumb || field === :_data
+    if field === :_path || field === :_track || field === :_data
         setfield!(obj, field, value)
         return
     end
-    crumb = getfield(obj, :_crumb)
-    push!(crumb.track.write, (crumb.path..., field))
-    setfield!(obj._data, field, value)
+    path = getfield(obj, :_path)
+    track = getfield(obj, :_track)
+    push!(track.write, (path..., field))
+    data = getfield(obj, :_data)
+    setfield!(data, field, value)
 end
 
 """
