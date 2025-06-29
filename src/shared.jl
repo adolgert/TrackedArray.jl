@@ -20,6 +20,8 @@ struct Tracker{T}
     end
 end
 
+places_read(tracker::Tracker) = Set(tracker.read)
+places_written(tracker::Tracker) = Set(tracker.write)
 
 """
 Use encapsulation to track reads/writes to a type.
@@ -214,14 +216,14 @@ function accept(state::CuddleState)
     empty!(state._tracker.write)
 end
 
-changed(state::CuddleState) = Set(state._tracker.write)
+changed(state::CuddleState) = places_written(state._tracker)
 
 function resetread(state::CuddleState)
     empty!(state._tracker.read)
 end
 
-wasread(state::CuddleState) = Set(state._tracker.read)
+wasread(state::CuddleState) = places_read(state._tracker)
 
-    function initialize_physical!(specification, physical_state::CuddleState) end
+function initialize_physical!(specification, physical_state::CuddleState) end
 
 end
