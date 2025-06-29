@@ -9,9 +9,15 @@ There will be exactly one Tracker per physical state, and every struct that
 may be assigned or read will have a pointer to this tracker.
 """
 struct Tracker{T}
-    read::Set{T}
-    write::Set{T}
-    Tracker{T}() where {T} = new(Set{T}(), Set{T}())
+    read::Vector{T}
+    write::Vector{T}
+    function Tracker{T}(expected_size::Int=1000) where {T}
+        read = Vector{T}()
+        write = Vector{T}()
+        sizehint!(read, expected_size)
+        sizehint!(write, expected_size)
+        new(read, write)
+    end
 end
 
 
@@ -55,29 +61,37 @@ function cuddle_array(::Type{D}, dims::Dims, base_path::Symbol, tracker::Tracker
     return arr
 end
 
-function Base.getproperty(obj::Cuddle, field::Symbol)
+@inline function Base.getproperty(obj::Cuddle, field::Symbol)
     if field === :_path || field === :_track || field === :_data
         return getfield(obj, field)
     end
     path = getfield(obj, :_path)
     track = getfield(obj, :_track)
-    push!(track.read, (path..., field))
+    # Create the key by appending the field to the path
+    key = (path..., field)
+    push!(track.read, key)
     data = getfield(obj, :_data)
     return getfield(data, field)
 end
 
-function Base.setproperty!(obj::Cuddle, field::Symbol, value)
+@inline function Base.setproperty!(obj::Cuddle, field::Symbol, value)
     if field === :_path || field === :_track || field === :_data
         setfield!(obj, field, value)
         return
     end
     path = getfield(obj, :_path)
     track = getfield(obj, :_track)
-    push!(track.write, (path..., field))
+    # Create the key by appending the field to the path
+    key = (path..., field)
+    push!(track.write, key)
     data = getfield(obj, :_data)
     setfield!(data, field, value)
 end
 
+
+# Type aliases for the tracker
+const PlaceType = Tuple{Symbol,Int,Symbol}
+const PlaceKey = PlaceType  # Union{PlaceType,Tuple}
 
 """
     ConstructState(specification, counts)
@@ -96,8 +110,13 @@ state = ConstructState(spec, Dict(:people => 3))
 ```
 """
 function ConstructState(specification, counts)
+    # Estimate expected tracker size based on total elements and fields
+    total_elements = sum(values(counts))
+    avg_fields = sum(length(fields) for (_, fields) in specification) / length(specification)
+    expected_size = Int(ceil(total_elements * avg_fields * 0.5))  # Assume 50% access rate
+    
     # Create the tracker that will be shared by all elements
-    tracker = Tracker{PlaceKey}()
+    tracker = Tracker{PlaceKey}(expected_size)
     
     # Generate struct types and create CuddleVectors
     fields = []
@@ -173,10 +192,6 @@ function ConstructState(specification, counts)
     return Base.invokelatest(eval(state_type_name), tracker, field_values...)
 end
 
-# Type aliases for the tracker
-const PlaceType = Tuple{Symbol,Int,Symbol}
-const PlaceKey = Union{PlaceType,Tuple}
-
 # CuddleVector implementation
 struct CuddleVector{T} <: AbstractVector{T}
     data::Vector{T}
@@ -184,12 +199,12 @@ struct CuddleVector{T} <: AbstractVector{T}
 end
 
 Base.size(cv::CuddleVector) = size(cv.data)
-Base.getindex(cv::CuddleVector, i::Int) = cv.data[i]
-Base.setindex!(cv::CuddleVector, v, i::Int) = (cv.data[i] = v)
+@inline Base.getindex(cv::CuddleVector, i::Int) = @inbounds cv.data[i]
+@inline Base.setindex!(cv::CuddleVector, v, i::Int) = (@inbounds cv.data[i] = v)
 Base.IndexStyle(::Type{<:CuddleVector}) = IndexLinear()
 
 # getitem for interface compatibility
-getitem(cv::CuddleVector, i::Int) = cv.data[i]
+@inline getitem(cv::CuddleVector, i::Int) = @inbounds cv.data[i]
 
 # CuddleState implementation
 abstract type CuddleState <: PhysicalState end
@@ -199,13 +214,13 @@ function accept(state::CuddleState)
     empty!(state._tracker.write)
 end
 
-changed(state::CuddleState) = state._tracker.write
+changed(state::CuddleState) = Set(state._tracker.write)
 
 function resetread(state::CuddleState)
     empty!(state._tracker.read)
 end
 
-wasread(state::CuddleState) = state._tracker.read
+wasread(state::CuddleState) = Set(state._tracker.read)
 
     function initialize_physical!(specification, physical_state::CuddleState) end
 
