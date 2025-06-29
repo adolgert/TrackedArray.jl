@@ -199,31 +199,14 @@ function accept(state::CuddleState)
     empty!(state._tracker.write)
 end
 
-function changed(state::CuddleState)
-    # Convert to Set of PlaceType, filtering out non-PlaceType entries
-    result = Set{PlaceType}()
-    for item in state._tracker.write
-        if item isa PlaceType
-            push!(result, item)
-        end
-    end
-    return result
-end
+changed(state::CuddleState) = state._tracker.write
 
 function resetread(state::CuddleState)
     empty!(state._tracker.read)
 end
 
-function wasread(state::CuddleState)
-    # Convert to Set of PlaceType, filtering out non-PlaceType entries
-    result = Set{PlaceType}()
-    for item in state._tracker.read
-        if item isa PlaceType
-            push!(result, item)
-        end
-    end
-    return result
-end
-function initialize_physical!(specification, physical_state::CuddleState) end
+wasread(state::CuddleState) = state._tracker.read
+
+    function initialize_physical!(specification, physical_state::CuddleState) end
 
 end
