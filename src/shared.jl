@@ -16,20 +16,6 @@ end
 
 
 """
-A TrackedStruct contains breadcrumbs so that it can notify the Tracker when
-it was read or written.
-
-This implementation requires that the user's type inherit from TrackedStruct
-in order to participate. It also requires that a user add a member called
-`_crumb::Crumb{C,T}`. This won't work with third-party types.
-"""
-abstract type TrackedStruct{C,T} end
-
-function hascrumb(tstype::Type{T}) where {T<: TrackedStruct}
-    hasfield(tstype, :_crumb) && fieldtype(tstype, :_crumb) <: Crumb
-end
-
-"""
 A crumb has a path to the object that owns the crumb, where a path is a tuple
 of symbols and integers. The tracker type may correspond exactly to that path plus
 another symbol, or it may be an abstract class, which is a Tuple.
@@ -37,25 +23,6 @@ another symbol, or it may be an abstract class, which is a Tuple.
 struct Crumb{P <: Tuple,T}
     path::P
     track::Tracker{T}
-end
-
-function Base.getproperty(obj::TrackedStruct, field::Symbol)
-    if field === :_crumb
-        return getfield(obj, :_crumb)
-    end
-    crumb = getfield(obj, :_crumb)
-    push!(crumb.track.read, (crumb.path..., field))
-    return getfield(obj, field)
-end
-
-function Base.setproperty!(obj::TrackedStruct, field::Symbol, value)
-    if field === :_crumb
-        setfield!(obj, :_crumb, value)
-        return
-    end
-    crumb = getfield(obj, :_crumb)
-    push!(crumb.track.write, (crumb.path..., field))
-    setfield!(obj, field, value)
 end
 
 """

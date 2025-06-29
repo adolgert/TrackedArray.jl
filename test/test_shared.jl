@@ -3,32 +3,6 @@ using TrackedArray
 using Base
 using Logging
 
-@testset "Shared Tracker TrackedStruct" begin
-    using TrackedArray.Shared
-    # Goal is vector[i,j].value = 3
-    TruckKey = Tuple{Symbol,Int,Int,Symbol}
-    TruckPath = Tuple{Symbol,Int,Int}
-    mutable struct Truck <: TrackedStruct{TruckPath,TruckKey}
-        wheels::Int
-        cargo::Int
-        _crumb::Crumb{TruckPath,TruckKey}
-        Truck() = new(4, 0)
-    end
-    @test hascrumb(Truck)
-    trucks = Array{Truck,2}(undef, 3, 7)
-    for idx in CartesianIndices(trucks)
-        trucks[idx] = Truck()
-    end
-    tracker = Tracker{TruckKey}()
-    for idx in CartesianIndices(trucks)
-        trucks[idx]._crumb = Crumb((:trucks, Tuple(idx.I)...), tracker)
-    end
-    trucks[1, 2].wheels = 18
-    @test first(tracker.write) == (:trucks, 1, 2, :wheels)
-    cargo = trucks[3, 2].cargo
-    @test first(tracker.read) == (:trucks, 3, 2, :cargo)
-end
-
 @testset "Shared Tracker Cuddle" begin
     using TrackedArray.Shared
     # Goal is vector[i,j].value = 3
