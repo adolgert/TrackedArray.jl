@@ -10,7 +10,6 @@ import TrackedArray.Dealer as Dealer
 import TrackedArray.Secondary as Secondary
 import TrackedArray.Shared as Shared
 
-
 function random_writes(every_key, physical, rng_seed)
     rng = Random.Xoshiro(rng_seed)
     for step_idx in 1:100

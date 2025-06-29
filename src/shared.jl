@@ -1,5 +1,5 @@
 module Shared
-import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
+import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState, initialize_physical!
 import Base
 export ConstructState
 export Tracker, TrackedStruct, hascrumb, Cuddle, cuddle_array
@@ -77,6 +77,7 @@ function Base.setproperty!(obj::Cuddle, field::Symbol, value)
     data = getfield(obj, :_data)
     setfield!(data, field, value)
 end
+
 
 """
     ConstructState(specification, counts)
@@ -223,5 +224,6 @@ function wasread(state::CuddleState)
     end
     return result
 end
+function initialize_physical!(specification, physical_state::CuddleState) end
 
 end
