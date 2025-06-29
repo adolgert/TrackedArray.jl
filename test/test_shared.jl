@@ -14,7 +14,16 @@ using Logging
         cargo::Int
         Car() = new(4, 0)
     end
-    
+
+    struct CarPhysical <: PhysicalState
+        fleet::Vector{Car}
+        params::Dict{Symbol,Float64}
+    end
+
+    struct CuddleCarPhysical <: PhysicalState
+        fleet::Vector{Cuddle{Car,TruckPath,TruckKey}}
+        params::Dict{Symbol,Float64}
+    end
     # Original way - verbose
     # CuddleTruck = Cuddle{Car,TruckPath,TruckKey}
     # trucks = Array{CuddleTruck,2}(undef, 3, 7)
