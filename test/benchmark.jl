@@ -8,7 +8,10 @@ import TrackedArray.Observed as Observed
 import TrackedArray.Doubles as Doubles
 import TrackedArray.Dealer as Dealer
 import TrackedArray.Secondary as Secondary
-
+import TrackedArray.Shared as Shared
+import TrackedArray.Contain as Contain
+import TrackedArray.ContainOptimized as ContainOptimized
+import TrackedArray.ThirdParty as ThirdParty
 
 function random_writes(every_key, physical, rng_seed)
     rng = Random.Xoshiro(rng_seed)
@@ -130,8 +133,16 @@ function get_module_from_name(module_name::String)
         return Dealer
     elseif module_name == "Secondary"
         return Secondary
+    elseif module_name == "Shared"
+        return Shared
+    elseif module_name == "Contain"
+        return Contain
+    elseif module_name == "ContainOptimized"
+        return ContainOptimized
+    elseif module_name == "ThirdParty"
+        return ThirdParty
     else
-        error("Unknown module: $module_name. Available modules: Original, Observed, Doubles, Dealer, Secondary")
+        error("Unknown module: $module_name. Available modules: Original, Observed, Doubles, Dealer, Secondary, Shared, Contain, ContainOptimized, ThirdParty")
     end
 end
 
@@ -147,7 +158,7 @@ function main()
     else
         # Test all available modules
         println("Benchmarking all modules")
-        all_modules = [Original, Observed, Doubles, Dealer, Secondary]
+        all_modules = [Original, Observed, Doubles, Dealer, Secondary, Shared]
         benchmark_all(all_modules)
     end
 end

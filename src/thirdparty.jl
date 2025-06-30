@@ -1,35 +1,59 @@
 """
-This module implements a notification-based tracking system where:
-- Each element only stores a reference to its container and index
+This module implements a notification-based tracking system similar to Observed, but:
+- ObservedVector stores a typed reference to Tracker{T} instead of Any
 - Elements notify their array when accessed/modified
-- Arrays notify the physical state
-- The physical state maintains centralized tracking
+- Arrays notify the tracker directly
+- The physical state maintains the tracker
 """
-module Observed
+module ThirdParty
 import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
 import ..TrackedArray: PlaceType
 
 export TrackedVector, ConstructState
 export gotten, changed, reset_tracking!, reset_gotten!
 
-"""
-    ObservedVector{T}
+# Type aliases
+const PlaceKey = PlaceType  # Tuple{Symbol,Int,Symbol}
 
-A vector that tracks access and changes to its elements and notifies the physical state.
 """
-mutable struct ObservedVector{T} <: AbstractVector{T}
+Tracker for centralized read/write tracking
+"""
+struct Tracker{T}
+    _reads::Vector{T}
+    _writes::Vector{T}
+    
+    function Tracker{T}(expected_size::Int=1000) where T
+        reads = Vector{T}()
+        writes = Vector{T}()
+        sizehint!(reads, expected_size)
+        sizehint!(writes, expected_size)
+        new(reads, writes)
+    end
+end
+
+# Access functions for tracker
+places_read(tracker::Tracker) = Set(tracker._reads)
+places_written(tracker::Tracker) = Set(tracker._writes)
+
+"""
+    ObservedVector{T,TK}
+
+A vector that tracks access and changes to its elements and notifies the tracker.
+TK is the tracker type to maintain type safety.
+"""
+mutable struct ObservedVector{T,TK<:Tracker} <: AbstractVector{T}
     data::Vector{T}
     array_name::Symbol
-    physical_state::Any  # Will be set to the actual physical state
+    tracker::TK
     
-    function ObservedVector{T}(::UndefInitializer, n::Integer) where T
-        new{T}(Vector{T}(undef, n), :unknown, nothing)
+    function ObservedVector{T,TK}(::UndefInitializer, n::Integer, array_name::Symbol, tracker::TK) where {T,TK<:Tracker}
+        new{T,TK}(Vector{T}(undef, n), array_name, tracker)
     end
 end
 
 # Implement AbstractArray interface
 Base.size(v::ObservedVector) = size(v.data)
-Base.getindex(v::ObservedVector{T}, i::Integer) where T = begin
+Base.getindex(v::ObservedVector{T,TK}, i::Integer) where {T,TK} = begin
     element = v.data[i]
     if hasfield(typeof(element), :_container)
         setfield!(element, :_container, v)
@@ -38,7 +62,7 @@ Base.getindex(v::ObservedVector{T}, i::Integer) where T = begin
     element
 end
 
-Base.setindex!(v::ObservedVector{T}, x, i::Integer) where T = begin
+Base.setindex!(v::ObservedVector{T,TK}, x, i::Integer) where {T,TK} = begin
     v.data[i] = x
     if hasfield(typeof(x), :_container)
         setfield!(x, :_container, v)
@@ -49,7 +73,7 @@ end
 
 # Track property access on elements
 function Base.getproperty(v::ObservedVector, field::Symbol)
-    if field in (:data, :array_name, :physical_state)
+    if field in (:data, :array_name, :tracker)
         return getfield(v, field)
     else
         error("Field $field not found in ObservedVector")
@@ -57,24 +81,22 @@ function Base.getproperty(v::ObservedVector, field::Symbol)
 end
 
 function Base.setproperty!(v::ObservedVector, field::Symbol, value)
-    if field in (:data, :array_name, :physical_state)
+    if field in (:data, :array_name, :tracker)
         setfield!(v, field, value)
     else
         error("Cannot set field $field in ObservedVector")
     end
 end
 
-# Notification methods
+# Notification methods - directly push to tracker
 function notify_read(v::ObservedVector, index::Int, field::Symbol)
-    if v.physical_state !== nothing
-        notify_read(v.physical_state, v.array_name, index, field)
-    end
+    key = (v.array_name, index, field)
+    push!(v.tracker._reads, key)
 end
 
 function notify_write(v::ObservedVector, index::Int, field::Symbol)
-    if v.physical_state !== nothing
-        notify_write(v.physical_state, v.array_name, index, field)
-    end
+    key = (v.array_name, index, field)
+    push!(v.tracker._writes, key)
 end
 
 # For compatibility with existing interface
@@ -85,9 +107,6 @@ reset_gotten!(v::ObservedVector) = v
 
 # Use TrackedVector as alias for compatibility
 const TrackedVector = ObservedVector
-
-# For interface compatibility
-getitem(v::ObservedVector, i::Int) = v[i]
 
 """
 Creates an element type with notification capability
@@ -173,81 +192,71 @@ function create_element_type(type_name::Symbol, fields::Vector)
 end
 
 """
-    ObservedState
+    ThirdPartyState
 
 A physical state that maintains centralized tracking of reads and writes.
 """
-abstract type ObservedState <: PhysicalState end
-
-# These will be implemented by the generated state types
-function notify_read end
-function notify_write end
+abstract type ThirdPartyState <: PhysicalState end
 
 # Create a concrete state type with tracking
-function create_state_type(field_names::Vector{Symbol}, field_types::Vector)
-    state_type_name = gensym("ObservedState")
+function create_state_type(field_names::Vector{Symbol}, field_types::Vector, tracker_type::Type)
+    state_type_name = gensym("ThirdPartyState")
     
     # Build field definitions
     field_defs = [Expr(:(::), fname, ftype) for (fname, ftype) in zip(field_names, field_types)]
     
     state_def = quote
-        mutable struct $state_type_name <: ObservedState
+        mutable struct $state_type_name <: ThirdPartyState
+            _tracker::$tracker_type
             $(field_defs...)
-            _reads::Vector{PlaceType}
-            _writes::Vector{PlaceType}
             
-            function $state_type_name($([fname for fname in field_names]...))
-                new($([fname for fname in field_names]...), PlaceType[], PlaceType[])
+            function $state_type_name(tracker::$tracker_type, $(field_names...))
+                new(tracker, $(field_names...))
             end
         end
     end
     
-    # Implement notification methods
-    notify_read_def = quote
-        function notify_read(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
-            push!(getfield(state, :_reads), (array_name, index, field))
-        end
-    end
-    
-    notify_write_def = quote
-        function notify_write(state::$state_type_name, array_name::Symbol, index::Int, field::Symbol)
-            push!(getfield(state, :_writes), (array_name, index, field))
-        end
-    end
-    
     eval(state_def)
-    eval(notify_read_def)
-    eval(notify_write_def)
-    
     return eval(state_type_name)
 end
 
 # Implement the required interface functions
-function changed(state::ObservedState)
-    return Set(getfield(state, :_writes))
+function changed(state::ThirdPartyState)
+    return places_written(getfield(state, :_tracker))
 end
 
-function wasread(state::ObservedState)
-    return Set(getfield(state, :_reads))
+function wasread(state::ThirdPartyState)
+    return places_read(getfield(state, :_tracker))
 end
 
-function accept(state::ObservedState)
-    empty!(getfield(state, :_reads))
-    empty!(getfield(state, :_writes))
+function accept(state::ThirdPartyState)
+    tracker = getfield(state, :_tracker)
+    empty!(tracker._reads)
+    empty!(tracker._writes)
     return state
 end
 
-function resetread(state::ObservedState)
-    empty!(getfield(state, :_reads))
+function resetread(state::ThirdPartyState)
+    tracker = getfield(state, :_tracker)
+    empty!(tracker._reads)
     return state
 end
 
 """
     ConstructState(specification, counts)
 
-Creates an ObservedState with ObservedVector arrays populated with observable structs.
+Creates a ThirdPartyState with ObservedVector arrays populated with observable structs.
 """
 function ConstructState(specification, counts)
+    # Estimate expected tracker size
+    total_elements = sum(values(counts))
+    avg_fields = sum(length(fields) for (_, fields) in specification) / length(specification)
+    expected_size = Int(ceil(total_elements * avg_fields * 0.5))
+    
+    # Create the tracker
+    tracker = Tracker{PlaceKey}(expected_size)
+    tracker_type = typeof(tracker)
+    
     # Generate element types and create ObservedVectors
     fields = []
     
@@ -259,9 +268,8 @@ function ConstructState(specification, counts)
         # Get the count for this array
         count = counts[array_name]
         
-        # Create ObservedVector
-        observed_vec = ObservedVector{element_type}(undef, count)
-        observed_vec.array_name = array_name
+        # Create ObservedVector with typed tracker
+        observed_vec = ObservedVector{element_type,tracker_type}(undef, count, array_name, tracker)
         
         push!(fields, array_name => observed_vec)
     end
@@ -269,16 +277,11 @@ function ConstructState(specification, counts)
     # Create the state type
     field_names = [pair[1] for pair in fields]
     field_types = [typeof(pair[2]) for pair in fields]
-    state_type = create_state_type(field_names, field_types)
+    state_type = create_state_type(field_names, field_types, tracker_type)
     
     # Create state instance
     field_values = [pair[2] for pair in fields]
-    physical_state = Base.invokelatest(state_type, field_values...)
-    
-    # Set back-references from vectors to state
-    for (array_name, vec) in fields
-        vec.physical_state = physical_state
-    end
+    physical_state = Base.invokelatest(state_type, tracker, field_values...)
     
     return physical_state
 end
