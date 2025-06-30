@@ -86,6 +86,9 @@ reset_gotten!(v::ObservedVector) = v
 # Use TrackedVector as alias for compatibility
 const TrackedVector = ObservedVector
 
+# For interface compatibility
+getitem(v::ObservedVector, i::Int) = v[i]
+
 """
 Creates an element type with notification capability
 """

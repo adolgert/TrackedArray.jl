@@ -2,7 +2,7 @@ using Profile
 using Random
 using TrackedArray
 using ProfileView
-import TrackedArray.Observed as Observed
+import TrackedArray.Contain as Observed
 
 # Try to load FileIO for saving profile data
 const HAS_FILEIO = try

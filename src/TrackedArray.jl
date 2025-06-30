@@ -10,4 +10,5 @@ include("doubles.jl")
 include("dealer.jl")
 include("secondary.jl")
 include("shared.jl")
+include("contain.jl")
 end
