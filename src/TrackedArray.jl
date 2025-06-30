@@ -11,4 +11,5 @@ include("dealer.jl")
 include("secondary.jl")
 include("shared.jl")
 include("contain.jl")
+include("contain_optimized.jl")
 end
