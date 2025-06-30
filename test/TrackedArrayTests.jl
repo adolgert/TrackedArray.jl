@@ -14,6 +14,7 @@ include("test_secondary.jl")
 include("test_shared.jl")
 include("test_contain.jl")
 include("test_contain_optimized.jl")
+include("test_thirdparty.jl")
 
 retest(args...; kwargs...) = ReTest.retest(args...; kwargs...)
 

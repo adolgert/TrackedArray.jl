@@ -11,6 +11,7 @@ import TrackedArray.Secondary as Secondary
 import TrackedArray.Shared as Shared
 import TrackedArray.Contain as Contain
 import TrackedArray.ContainOptimized as ContainOptimized
+import TrackedArray.ThirdParty as ThirdParty
 
 function random_writes(every_key, physical, rng_seed)
     rng = Random.Xoshiro(rng_seed)
@@ -138,8 +139,10 @@ function get_module_from_name(module_name::String)
         return Contain
     elseif module_name == "ContainOptimized"
         return ContainOptimized
+    elseif module_name == "ThirdParty"
+        return ThirdParty
     else
-        error("Unknown module: $module_name. Available modules: Original, Observed, Doubles, Dealer, Secondary, Shared, Contain, ContainOptimized")
+        error("Unknown module: $module_name. Available modules: Original, Observed, Doubles, Dealer, Secondary, Shared, Contain, ContainOptimized, ThirdParty")
     end
 end
 

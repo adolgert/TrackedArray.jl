@@ -12,4 +12,5 @@ include("secondary.jl")
 include("shared.jl")
 include("contain.jl")
 include("contain_optimized.jl")
+include("thirdparty.jl")
 end
