@@ -470,3 +470,153 @@ Absolutely! Let's create a streamlined approach that makes "simple things simple
   2. Complex things are possible: Full protocol system underneath
   3. Extensible: Other macro writers can build on the protocol layer
   4. Progressive disclosure: Users can start simple and add complexity as needed
+
+
+Recommendation: Hybrid Approach
+
+  Implement Approach 2 as the primary interface with Approach 5 as syntactic sugar:
+
+  # Core API (higher-order function)
+  ThirdPartyState(
+      entities = (Entity, 100),
+      particles = (Particle, 50)
+  )
+
+  # Macro sugar for DSL builders  
+  @tracked_state begin
+      entities::Vector{Entity}[100]
+      particles::Vector{Particle}[50]
+  end
+
+# Me, just me
+
+What if when you access the vector, it returns both the member and the index of that member?
+Then when you set a property on the member it also passes in the index.
+OK, this is a kind of Proxy/view-based approach.
+
+And there is the OCaml-style, where you do copy-on-write. That's essentially a large tree.
+
+Or make a macro for the moement you read/write values.
+
+## Instrument the fire! function
+
+2. Cassette.jl-style Contextual Dispatch
+  using Cassette
+
+  Cassette.@context TrackingCtx
+
+  # Intercept all getproperty calls within fire! functions
+  function Cassette.overdub(ctx::TrackingCtx, ::typeof(getproperty), obj, field)
+      record_read!(ctx.metadata, obj, field)
+      Cassette.fallback(ctx, getproperty, obj, field)
+  end
+
+  # Execute fire! with tracking context
+  fire_with_tracking!(physical, event) = Cassette.overdub(TrackingCtx(metadata=physical),
+  fire!, physical, event)
+
+  3. IRTools.jl for Compiler-level Instrumentation
+  using IRTools
+
+  # Transform fire! functions at IR level to inject tracking
+  @dynamo function track_fire!(args...)
+      ir = IR(args...)
+      for (x, stmt) in ir
+          if stmt.expr isa Expr && stmt.expr.head == :call
+              # Inject tracking around property access
+              insert_tracking_call!(ir, x, stmt)
+          end
+      end
+      return ir
+  end
+
+
+# Crazy Dense Trackers
+
+Ultra-Efficient Storage Options
+
+  1. Dense Bitsets for Fixed Schema
+  # If you know all possible PlaceKeys at compile time:
+  struct BitsetTracker{N}
+      changed::NTuple{N, UInt64}  # Pack bits directly in struct
+      read::NTuple{N, UInt64}
+  end
+
+  # Example for 512 possible PlaceKeys:
+  struct DenseTracker
+      changed::NTuple{8, UInt64}  # 8 * 64 = 512 bits
+      read::NTuple{8, UInt64}
+  end
+
+  # Set/check operations are just bit manipulation:
+  @inline function mark_changed!(tracker, place_id::Int)
+      word_idx = (place_id - 1) ÷ 64 + 1
+      bit_idx = (place_id - 1) % 64
+      word = tracker.changed[word_idx]
+      tracker.changed = Base.setindex(tracker.changed, word | (1 << bit_idx), word_idx)
+  end
+
+  2. Sparse IntSet for Dynamic Schema
+  # Julia's IntSet is highly optimized for sparse integer collections
+  mutable struct SparseTracker
+      changed::IntSet
+      read::IntSet
+  end
+
+  # Extremely fast operations:
+  push!(tracker.changed, place_key_id)
+  place_key_id in tracker.changed
+
+  3. Hybrid Approach with Tiered Storage
+  struct TieredTracker
+      # Fast path: first 64 most common PlaceKeys
+      fast_changed::UInt64
+      fast_read::UInt64
+
+      # Slow path: overflow for rare PlaceKeys  
+      overflow_changed::Union{Nothing, IntSet}
+      overflow_read::Union{Nothing, IntSet}
+  end
+
+  4. Memory-Mapped Bitsets for Huge State Spaces
+  struct MMapTracker
+      changed::BitVector  # Memory-mapped to file
+      read::BitVector     # Shared across processes
+  end
+
+  PlaceKey → Integer Mapping Strategy
+
+  For maximum efficiency, PlaceKeys should map to dense integers:
+
+  # Compile-time PlaceKey enumeration
+  @enum PlaceKeyEnum begin
+      AGENTS_1_AGE = 1
+      AGENTS_1_POSITION = 2
+      AGENTS_2_AGE = 3
+      # ... etc
+  end
+
+  # Or dynamic mapping with perfect hashing
+  struct PlaceKeyMap
+      key_to_id::Dict{PlaceKey, Int32}  # PlaceKey → dense integer
+      id_to_key::Vector{PlaceKey}       # Integer → PlaceKey  
+      next_id::Ref{Int32}
+  end
+
+  Most Efficient Approach
+
+  For absolute maximum efficiency:
+
+  struct UltraTracker{N}
+      # Store changed/read as packed bits in stack-allocated tuples
+      changed_bits::NTuple{N, UInt64}
+      read_bits::NTuple{N, UInt64}
+
+      # Single allocation for PlaceKey mapping
+      place_map::Vector{PlaceKey}  # id → PlaceKey lookup
+  end
+
+  # Operations are branchless bit manipulation:
+  @inline mark_changed!(t, id) = set_bit!(t.changed_bits, id)
+  @inline was_changed(t, id) = get_bit(t.changed_bits, id)
+  @inline reset!(t) = fill_zero!(t.changed_bits, t.read_bits)
