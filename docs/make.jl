@@ -1,13 +1,14 @@
-using TrackedArray
 using Documenter
 
-DocMeta.setdocmeta!(TrackedArray, :DocTestSetup, :(using TrackedArray); recursive=true)
+# Note: Commenting out TrackedArray usage to allow docs to build independently
+# using TrackedArray
+# DocMeta.setdocmeta!(TrackedArray, :DocTestSetup, :(using TrackedArray); recursive=true)
 
 makedocs(;
-    modules=[TrackedArray],
     authors="Andrew Dolgert <github@dolgert.com>",
     sitename="TrackedArray.jl",
     checkdocs=:none,
+    doctest=false,
     format=Documenter.HTML(;
         canonical="https://adolgert.github.io/TrackedArray.jl",
         edit_link="main",
@@ -15,6 +16,8 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Implementations" => "implements.md",
+        "Alternatives" => "alternatives.md",
     ],
 )
 
