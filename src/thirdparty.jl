@@ -34,6 +34,12 @@ end
 # Access functions for tracker
 places_read(tracker::Tracker) = Set(tracker._reads)
 places_written(tracker::Tracker) = Set(tracker._writes)
+# Modification functions for tracker
+add_read(tracker::Tracker, key) = (push!(tracker._reads, key); nothing)
+add_write(tracker::Tracker, key) = (push!(tracker._writes, key); nothing)
+clear_read(tracker::Tracker) = (empty!(tracker._reads); nothing)
+clear_all(tracker::Tracker) = (empty!(tracker._reads); empty!(tracker._writes); nothing)
+
 
 """
     ObservedVector{T,TK}
@@ -91,12 +97,12 @@ end
 # Notification methods - directly push to tracker
 function notify_read(v::ObservedVector, index::Int, field::Symbol)
     key = (v.array_name, index, field)
-    push!(v.tracker._reads, key)
+    add_read(v.tracker, key)
 end
 
 function notify_write(v::ObservedVector, index::Int, field::Symbol)
     key = (v.array_name, index, field)
-    push!(v.tracker._writes, key)
+    add_write(v.tracker, key)
 end
 
 # For compatibility with existing interface
@@ -231,14 +237,13 @@ end
 
 function accept(state::ThirdPartyState)
     tracker = getfield(state, :_tracker)
-    empty!(tracker._reads)
-    empty!(tracker._writes)
+    clear_all(tracker)
     return state
 end
 
 function resetread(state::ThirdPartyState)
     tracker = getfield(state, :_tracker)
-    empty!(tracker._reads)
+    clear_read(tracker)
     return state
 end
 

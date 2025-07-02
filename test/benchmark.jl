@@ -158,7 +158,7 @@ function main()
     else
         # Test all available modules
         println("Benchmarking all modules")
-        all_modules = [Original, Observed, Doubles, Dealer, Secondary, Shared]
+        all_modules = [Original, Observed, Doubles, Dealer, Secondary, Shared, ContainOptimized, ThirdParty]
         benchmark_all(all_modules)
     end
 end

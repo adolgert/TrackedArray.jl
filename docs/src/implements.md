@@ -21,18 +21,20 @@ physical = ConstructState(specification, counts)
 
 ## Benchmark Summary
 
-Performance comparison from git hash b464082 on 2025-07-02:
+Performance comparison from git hash e524770-dirty on 2025-07-02:
 
 | Implementation | Small Random Writes | Small All Writes | Large Random Writes | Large All Writes | Notes |
 |---|---|---|---|---|---|
-| **Observed** | 0.17ms | 4.13ms | 0.28ms | 46.76ms | **Best overall performance** |
-| **Secondary** | 0.16ms | 3.27ms | 0.28ms | 45.55ms | **Fastest, uses BitVectors** |
-| **Original** | 0.58ms | 6.05ms | 1.69ms | 68.28ms | Baseline implementation |
-| **Shared** | 0.18ms | 3.92ms | 0.30ms | 50.41ms | Shared tracker approach |
-| **Doubles** | 2.04ms | 8.00ms | 15.42ms | 129.50ms | Per-field bit tracking |
-| **Dealer** | 0.52ms | 12.96ms | 0.60ms | 103.68ms | High memory usage |
+| **Observed** | 0.15ms | 3.36ms | 0.28ms | 47.56ms | **Best overall performance** |
+| **Secondary** | 0.19ms | 3.78ms | 0.29ms | 47.92ms | **Fastest with BitVectors** |
+| **ThirdParty** | 0.20ms | 5.24ms | 0.32ms | 57.23ms | **Typed tracker references** |
+| **Shared** | 0.20ms | 4.15ms | 0.28ms | 50.75ms | Shared tracker approach |
+| **ContainOptimized** | 0.27ms | 7.82ms | 0.32ms | 49.20ms | Optimized Cuddle structs |
+| **Original** | 0.60ms | 6.35ms | 1.62ms | 67.65ms | Baseline implementation |
+| **Dealer** | 0.51ms | 12.48ms | 0.62ms | 111.47ms | High memory usage |
+| **Doubles** | 2.11ms | 8.66ms | 15.11ms | 131.39ms | Per-field bit tracking |
 
-*Memory usage ranges from ~160KB (best) to ~8MB (worst) for small tests, and from ~140KB to ~470MB for large tests.*
+*Memory usage ranges from ~140KB (best) to ~8MB (worst) for small tests, and from ~140KB to ~475MB for large tests.*
 
 ## Implementation History
 
