@@ -4,6 +4,46 @@ This module implements a notification-based tracking system similar to Observed,
 - Elements notify their array when accessed/modified
 - Arrays notify the tracker directly
 - The physical state maintains the tracker
+
+The user definition of:
+```
+@tracked struct Entity{Q}
+    quality::Q
+    speed::Float64
+end
+```
+produces
+```
+mutable struct Entity{Q,Tracker,Index}
+    quality::Q
+    speed::Float64
+    _tracker::Tracker
+    _index::Index
+end
+```
+The same goes for:
+```
+@tracked struct Fly
+    speed::Float64
+end
+```
+Then we make:
+```
+@physical_state BoardState
+    entities::Vector{Entity{Int}}
+    flies::Dict{Tuple{Int,Int},Fly}
+    params::Dict{Symbol,Float64}
+end
+```
+This creates
+```
+struct BoardState
+    entites::TrackedVector{Entity{Int,Tracker{Tuple},Tuple{Symbol,Int}}}
+    flies::TrackedDict{Fly{Tracker{Tuple},Tuple{Symbol,Tuple{Int,Int}}}}
+    _tracker::Tracker{Tuple}
+end
+```
+
 """
 module ThirdParty
 import ..TrackedArray: accept, changed, resetread, wasread, PhysicalState
