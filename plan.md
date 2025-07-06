@@ -620,3 +620,201 @@ Ultra-Efficient Storage Options
   @inline mark_changed!(t, id) = set_bit!(t.changed_bits, id)
   @inline was_changed(t, id) = get_bit(t.changed_bits, id)
   @inline reset!(t) = fill_zero!(t.changed_bits, t.read_bits)
+
+# Order of Operations
+
+The Container Shadow Hierarchy
+
+  # User's types - Person points to its container's shadow
+  mutable struct Person
+      health::Float64
+      age::Float64
+      _container::PeopleShadow  # Points to the Vector's shadow
+      _index::Int               # Index in the people vector
+  end
+
+  struct PersonState
+      people::Vector{Person}
+      children::Vector{Int}
+  end
+
+  struct MyState
+      population::Vector{PersonState}
+      cars::Dict{String,Car}
+      params::Dict{Symbol,Float64}
+  end
+
+  # Shadow hierarchy - shadows CONTAINERS only
+  struct PeopleShadow
+      _container::PopulationShadow  # Parent container's shadow
+      _index::Int                   # Index in population vector
+      _field::Symbol               # :people
+  end
+
+  struct PopulationShadow
+      _tracker::Tracker            # Root has tracker
+      _field::Symbol              # :population
+  end
+
+  How it works:
+
+  1. Person's getproperty:
+  function Base.getproperty(p::Person, field::Symbol)
+      if field in (:health, :age)
+          # Notify through container shadow
+          notify_read(p._container, p._index, field)
+          return getfield(p, field)
+      end
+      return getfield(p, field)
+  end
+
+  2. Container shadow builds path:
+  function notify_read(shadow::PeopleShadow, index::Int, field::Symbol)
+      # Path: population[shadow._index].people[index].field
+      path = (:population, shadow._index, :people, index, field)
+      record_read!(shadow._container._tracker, path)
+  end
+
+  Key difference:
+
+  - No PersonShadow - Person points directly to PeopleShadow
+  - Shadows are for containers (Vector, Dict) not elements
+  - Person knows its container and index in that container
+  - Path building uses container shadows + element indices
+
+  So the hierarchy is:
+  - MyState contains Vector{PersonState}
+  - PopulationShadow shadows this vector
+  - PersonState contains Vector{Person}
+  - PeopleShadow shadows this vector (knows it's at population[i].people)
+  - Person points to PeopleShadow + knows its index
+
+  Is this the correct understanding?
+
+> that looks close. Do you see challenges for implementing this? Do you see challenges for a client of a 
+  framework that uses this? would it be hard to initialize?
+
+⏺ Looking at this design, I see several challenges:
+
+  Implementation Challenges:
+
+  1. Initialization Order Dependency
+
+  # Problem: Need to create shadows before creating Persons, 
+  # but need to know container structure first
+
+  # Must build top-down:
+  tracker = Tracker()
+  pop_shadow = PopulationShadow(tracker, :population)
+
+  # For each PersonState position:
+  people_shadow = PeopleShadow(pop_shadow, i, :people)
+
+  # Only now can we create Persons
+  person = Person(health, age, people_shadow, j)
+
+  2. Container Type Variety
+
+  # User might use:
+  - Vector{Person}
+  - Dict{String, Person}
+  - SVector{10, Person}
+  - CircularBuffer{Person}
+
+  # Each needs a different shadow type?
+  struct VectorShadow{T} ... end
+  struct DictShadow{K,V} ... end
+  struct SVector...
+
+  3. Dynamic Container Operations
+
+  # What happens with:
+  push!(state.population[1].people, Person(...))  # New person needs shadow ref
+  deleteat!(state.population[1].people, 3)       # Indices shift!
+  resize!(...)                                    # All indices invalid
+
+  Client Challenges:
+
+  1. Construction Complexity
+
+  # User can't just write:
+  state = MyState(
+      [PersonState([Person(100.0, 25.0), ...], [1,2])],
+      Dict("car1" => Car(5.0)),
+      Dict(:temp => 20.0)
+  )
+
+  # They need something like:
+  state = construct_tracked_state(MyState,
+      population_size = 10,
+      people_per_state = 100,
+      ...specification...
+  )
+
+  2. Loss of Direct Initialization
+
+  # Can't create Person independently:
+  p = Person(100.0, 25.0)  # Error: missing shadow reference!
+
+  # Must create through framework:
+  p = create_person(state.population[1].people, 100.0, 25.0)
+
+  3. Serialization/Deserialization
+
+  # Saving/loading becomes complex:
+  # - Can't just serialize the data
+  # - Must rebuild shadow hierarchy on load
+  # - Shadow pointers are not serializable
+
+  Possible Solutions:
+
+  1. Two-Phase Initialization
+
+  # Phase 1: Build untracked
+  state = MyState(...)
+
+  # Phase 2: Add tracking
+  tracked_state = add_tracking(state)  # Walks tree, adds shadows
+
+  2. Factory Pattern
+
+  @tracked_state struct MyState
+      population::Vector{PersonState}[:people => Vector{Person}]
+  end
+
+  # Generates factory that handles shadow creation
+  state = MyState() do builder
+      builder.add_person_state() do ps_builder
+          ps_builder.add_person(100.0, 25.0)
+      end
+  end
+
+  3. Lazy Shadow Creation
+
+  mutable struct Person
+      health::Float64
+      age::Float64
+      _shadow_ref::Union{Nothing, ShadowRef}
+
+      Person(h, a) = new(h, a, nothing)  # Can create without shadow
+  end
+
+  # Shadow attached on first access through tracked container
+
+  4. Registration-Based
+
+  # User creates normally
+  state = MyState(...)
+
+  # Register for tracking
+  tracker = Tracker()
+  register_trackable!(tracker, state, [
+      :population => [:people => [:health, :age]]
+  ])
+  # This walks the tree and injects shadows
+
+  The biggest challenge is that this design requires the framework to control object creation, which goes
+  against Julia's composability philosophy where users expect to create objects directly.
+
+  Would a hybrid approach work better where shadows are created lazily on first tracked access?
+  

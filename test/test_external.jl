@@ -5,13 +5,23 @@ using Retest
 @testset "External:: Construction from minimal specification" begin
     using TrackedArray.External
 
-    mutable struct Person
+    mutable struct Person{T}
         health::Float64
         age::Float64
+        _track::T
         Person() = new(0.0, 0.0)
     end
+    struct PersonState{P,T}
+        people::Vector{Person{T}}
+        children::Vector{Int}
+        _track::P
+    end
+    mutable struct Car
+        horn::Float64
+    end
     struct MyState <: PhysicalState
-        people::Vector{Person}
+        population::Vector{PersonState}
+        cars::Dict{String,Car}
         params::Dict{Symbol,Float64}
         MyState(n) = new([Person() for _ in 1:n], Dict{Symbol,Float64}())
     end
