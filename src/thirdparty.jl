@@ -35,6 +35,11 @@ Then we make:
     params::Dict{Symbol,Float64}
 end
 ```
+The `@physical_state` macro loops through the containers to see that the keys
+are `Tuple{Symbol,Int,Symbol}` for the vector and `Tuple{Symbol,Tuple{Int,Int},Symbol}` for the
+dictionary. It does a `typejoin` on them to determine that it should use
+either a Tuple or a Union of the two tuples as the data type for the Tracker.
+Let's choose Tuple.
 This creates
 ```
 struct BoardState
